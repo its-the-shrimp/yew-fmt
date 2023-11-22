@@ -6,11 +6,13 @@ mod html;
 use std::{
     process::{ExitCode, Command, Stdio},
     collections::HashMap,
-    env::args_os,
-    str::from_utf8
+    str::from_utf8,
+    fmt::{Display, self},
+    fs::OpenOptions,
+    io::Write,
 };
 use anyhow::Context;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use formatter::Formatter;
 
 fn parse_rustfmt_output<'a>(
@@ -44,18 +46,42 @@ fn parse_rustfmt_output<'a>(
     res
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+enum EmitTarget {
+    #[default]
+    Files,
+    Stdout,
+}
+
+impl Display for EmitTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Stdout => "stdout",
+            Self::Files => "files",
+        })
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "yew-fmt", author, about)]
 struct Cli {
+    #[arg(
+        long,
+        default_value_t,
+        value_name = "what",
+        help = "What data to emit and how",
+        next_line_help = true,
+    )]
+    emit: EmitTarget,
     #[arg(required = true)]
     files: Vec<String>,
 }
 
 pub fn main() -> anyhow::Result<ExitCode> {
-    let cli = Cli::parse();
-
+    let Cli { emit, files } = Cli::parse();
     let rustfmt = Command::new("rustfmt")
-        .args(["--emit", "stdout"]).args(args_os().skip(1))
+        .args(["--emit", "stdout"])
+        .args(&files)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -67,7 +93,7 @@ pub fn main() -> anyhow::Result<ExitCode> {
 
     let files = parse_rustfmt_output(
         from_utf8(&rustfmt.stdout).context("failed to parse rustfmt's output")?,
-        cli.files.len()
+        files.len()
     );
     let mut formatter = Formatter::default();
 
@@ -77,7 +103,15 @@ pub fn main() -> anyhow::Result<ExitCode> {
         let Some(out) = res.emit_error()
             .with_context(|| format!("failed to print a syntax error in {file:?}"))?
             else { return Ok(ExitCode::FAILURE) };
-        println!("{file}:\n\n{out}");
+        match emit {
+            EmitTarget::Stdout =>
+                println!("{file}:\n\n{out}"),
+            EmitTarget::Files =>
+                _ = OpenOptions::new().write(true).open(file)
+                    .with_context(|| format!("failed to open {file:?} for writing"))?
+                    .write(out.as_bytes())
+                    .with_context(|| format!("failed to write to {file:?}"))?,
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
