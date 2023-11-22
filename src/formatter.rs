@@ -8,6 +8,19 @@ use syn::Expr;
 use syn::{spanned::Spanned, Macro, visit::Visit};
 use crate::html::*;
 
+/// Returns the length of the last line of the string, or None if the string has only 1 line
+fn last_line_len(text: &str) -> Option<usize> {
+    text.bytes().rev().enumerate().find_map(|(i, c)| (c == b'\n').then_some(i)) 
+}
+
+fn print_break(out: &mut String, indent: usize) {
+    out.reserve(indent + 1);
+    out.push('\n');
+    for _ in 0 .. indent {
+        out.push(' ');
+    }
+}
+
 trait Format<'src> {
     fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()>;
 }
@@ -49,7 +62,7 @@ impl<'src> Format<'src> for HtmlFragment {
         }
         block.add_spanned(ctx, &self.gt_token)?;
 
-        block.add_block(FmtSep::None, |block| anyhow::Ok({
+        block.add_block(Spacing::ELEMENT_CHILDREN, |block| anyhow::Ok({
             for child in &self.children {
                 child.format(block, ctx)?;
                 block.add_sep();
@@ -66,25 +79,26 @@ impl<'src> Format<'src> for HtmlDynamicElement {
     fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         block.add_text("<@");
         self.name.format(block, ctx)?;
+        let self_closing = self.closing_tag.is_none() || self.children.is_empty();
 
-        block.add_block(FmtSep::Space, |block| anyhow::Ok({
+        block.add_block(Spacing::props(self_closing), |block| anyhow::Ok({
             for prop in &self.props {
                 prop.format(block, ctx)?;
                 block.add_sep();
             }
         }))?;
 
-        Ok(if self.closing_tag.is_some() {
+        Ok(if self_closing {
+            block.add_text("/>");
+        } else {
             block.add_text(">");
-            block.add_block(FmtSep::None, |block| anyhow::Ok({
+            block.add_block(Spacing::ELEMENT_CHILDREN, |block| anyhow::Ok({
                 for child in &self.children {
                     child.format(block, ctx)?;
                     block.add_sep();
                 }
             }))?;
             block.add_text("</@>");
-        } else {
-            block.add_text("/>");
         })
     }
 }
@@ -93,22 +107,25 @@ impl<'src> Format<'src> for HtmlLiteralElement {
     fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         block.add_text("<");
         block.add_spanned_iter(ctx, self.name.clone())?;
+        let self_closing = self.closing_tag.is_none() || self.children.is_empty();
 
-        block.add_block(FmtSep::Space, |block| anyhow::Ok({
+        block.add_block(Spacing::props(self_closing), |block| anyhow::Ok({
             for prop in &self.props {
                 prop.format(block, ctx)?;
                 block.add_sep();
             }
+            if let Some((_, base)) = &self.prop_base {
+                block.add_text("..");
+                block.add_spanned(ctx, base)?;
+            }
         }))?;
         
-        if let Some((_, base)) = &self.prop_base {
-            block.add_text("..");
-            block.add_spanned(ctx, base)?;
-        }
 
-        Ok(if self.closing_tag.is_some() {
+        Ok(if self_closing {
+            block.add_text("/>");
+        } else {
             block.add_text(">");
-            block.add_block(FmtSep::None, |block| anyhow::Ok({
+            block.add_block(Spacing::ELEMENT_CHILDREN, |block| anyhow::Ok({
                 for child in &self.children {
                     child.format(block, ctx)?;
                     block.add_sep();
@@ -117,8 +134,6 @@ impl<'src> Format<'src> for HtmlLiteralElement {
             block.add_text("</");
             block.add_spanned_iter(ctx, self.name.clone())?;
             block.add_text(">");
-        } else {
-            block.add_text("/>");
         })
     }
 }
@@ -185,7 +200,7 @@ impl<'src> Format<'src> for HtmlIf {
         block.add_text("if ");
         block.add_spanned(ctx, &self.condition)?;
         block.add_text(" {");
-        block.add_block(FmtSep::None, |block| anyhow::Ok({
+        block.add_block(Spacing::BLOCK_CHILDREN, |block| anyhow::Ok({
             for child in &self.then_branch {
                 child.format(block, ctx)?;
                 block.add_sep();
@@ -208,7 +223,7 @@ impl<'src> Format<'src> for HtmlElse {
             Self::If(_, r#if) => r#if.format(block, ctx)?,
             Self::Tree(.., children) => {
                 block.add_text("{");
-                block.add_block(FmtSep::None, |block| anyhow::Ok({
+                block.add_block(Spacing::BLOCK_CHILDREN, |block| anyhow::Ok({
                     for child in children {
                         child.format(block, ctx)?;
                         block.add_sep();
@@ -233,36 +248,6 @@ pub struct Formatter {
     output: String,
 }
 
-/// Represents the way in which to break up adjacent tokens
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-#[repr(usize)]
-enum FmtSep {
-    #[default]
-    None,
-    Space,
-    Newline,
-}
-
-impl FmtSep {
-    fn len(&self) -> usize {
-        matches!(self, Self::Space) as usize
-    }
-
-    fn print(&self, indent: usize, out: &mut String) {
-        match self {
-            FmtSep::None => (),
-            FmtSep::Space => out.push(' '),
-            FmtSep::Newline => {
-                out.reserve(indent + 1);
-                out.push('\n');
-                for _ in 0 .. indent {
-                    out.push(' ');
-                }
-            }
-        }
-    }
-}
-
 /// Represents text that's not yet written: text, space, or a group of those
 // TODO: handle comments
 #[derive(PartialEq, Eq)]
@@ -272,33 +257,45 @@ enum FmtToken<'src> {
     Block(FmtBlock<'src>)
 }
 
-#[derive(PartialEq, Eq, Default)]
-struct FmtBlock<'src> {
-    sep: FmtSep,
-    // TODO: find a way to reuse this allocation
-    tokens: Vec<FmtToken<'src>>,
-    width: usize
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+struct Spacing {
+    before: bool,
+    between: bool,
+    after: bool,
 }
 
-impl FmtToken<'_> {
-    fn width(&self, sep: FmtSep) -> usize {
-        match *self {
-            Self::Text(text) => text.len(),
-            Self::Sep => sep.len(),
-            Self::Block(FmtBlock { width, .. }) => width,
-        }
+impl Spacing {
+    const ELEMENT_CHILDREN: Self = Self { before: false, between: false, after: false };
+    const   BLOCK_CHILDREN: Self = Self { before: true,  between: false, after: true  };
+
+    const fn props(self_closing: bool) -> Self {
+        Self { before: true, between: true, after: self_closing }
     }
 
-    fn print(&self, indent: usize, sep: FmtSep, out: &mut String) {
-        match self {
-            Self::Text(text) => out.push_str(text),
-            Self::Sep => sep.print(indent, out),
-            Self::Block(block) => block.print(indent, out)
-        }
+    const fn around(&self) -> bool {
+        self.before && self.after
     }
+}
+
+#[derive(PartialEq, Eq)]
+struct FmtBlock<'src> {
+    // TODO: find a way to reuse this allocation
+    tokens: Vec<FmtToken<'src>>,
+    width: usize,
+    broken: bool,
+    spacing: Spacing
 }
 
 impl<'src> FmtBlock<'src> {
+    fn new(spacing: Spacing) -> Self {
+        Self {
+            tokens: vec![],
+            width: (spacing.before || spacing.after) as usize,
+            broken: false,
+            spacing,
+        }
+    }
+
     fn add_text(&mut self, text: &'src str) {
         self.tokens.push(FmtToken::Text(text));
         self.width += text.len();
@@ -306,12 +303,12 @@ impl<'src> FmtBlock<'src> {
 
     fn add_sep(&mut self) {
         self.tokens.push(FmtToken::Sep);
-        self.width += self.sep.len();
+        self.width += self.spacing.between as usize;
     }
 
     /// adds a block and gives a mutable reference to it to `f`
-    fn add_block<R>(&mut self, sep: FmtSep, f: impl FnOnce(&mut Self) -> R) -> R {
-        let mut block = Self { sep, tokens: vec![], width: 0 };
+    fn add_block<R>(&mut self, spacing: Spacing, f: impl FnOnce(&mut Self) -> R) -> R {
+        let mut block = Self::new(spacing);
         let res = f(&mut block);
         if block.tokens.last() == Some(&FmtToken::Sep) {
             block.tokens.pop();
@@ -356,23 +353,21 @@ impl<'src> FmtBlock<'src> {
     }
 
     fn determine_breaking(&mut self, offset: usize, indent: usize) {
-        let mut max_width = offset + indent;
-        for token in &self.tokens {
-            max_width += token.width(self.sep);
-        }
+        let max_width = offset + indent + self.width
+            + (self.spacing.around() && !self.tokens.is_empty()) as usize;
         if max_width > Formatter::MAX_WIDTH {
-            self.sep = FmtSep::Newline;
+            self.broken = true;
             self.width = 0;
             let indent = indent + Formatter::INDENT_STEP;
             let mut offset = 0;
             for token in &mut self.tokens {
                 match token {
-                    FmtToken::Text(text) => offset += text.len(),
-                    FmtToken::Sep => match self.sep {
-                        FmtSep::None => (),
-                        FmtSep::Space => offset += 1,
-                        FmtSep::Newline => offset = 0,
+                    FmtToken::Text(text) => if let Some(len) = last_line_len(text) {
+                        offset = len;
+                    } else {
+                        offset += text.len();
                     }
+                    FmtToken::Sep => offset = 0,
                     FmtToken::Block(block) => {
                         block.determine_breaking(offset, indent);
                         offset += block.width;
@@ -382,16 +377,44 @@ impl<'src> FmtBlock<'src> {
         }
     }
 
-    fn print(&self, indent: usize, out: &mut String) {
-        let new_indent = indent
-            + if self.sep == FmtSep::Newline {Formatter::INDENT_STEP} else {0};
-        if !self.tokens.is_empty() {
-            self.sep.print(new_indent, out);
-            for token in &self.tokens {
-                token.print(new_indent, self.sep, out);
+    fn print(&self, indent: Option<usize>, out: &mut String) {
+        fn print_token(
+            token: &FmtToken<'_>,
+            indent: Option<usize>,
+            spaced: bool,
+            out: &mut String
+        ) {
+            match token {
+                FmtToken::Text(text) => out.push_str(text),
+                FmtToken::Sep => if let Some(indent) = indent {
+                    print_break(out, indent)
+                } else if spaced {
+                    out.push(' ');
+                }
+                FmtToken::Block(block) => block.print(indent, out)
             }
-            if self.sep == FmtSep::Newline {
-                FmtSep::Newline.print(indent, out)
+        }
+
+        if self.tokens.is_empty() {
+            if self.spacing.after || self.spacing.before {
+                out.push(' ');
+            }
+        } else if let Some(old_indent) = indent.filter(|_| self.broken) {
+            let new_indent = old_indent + Formatter::INDENT_STEP;
+            print_break(out, new_indent);
+            for token in &self.tokens {
+                print_token(token, Some(new_indent), false, out);
+            }
+            print_break(out, old_indent);
+        } else {
+            if self.spacing.before {
+                out.push(' ');
+            }
+            for token in &self.tokens {
+                print_token(token, None, self.spacing.between, out);
+            }
+            if self.spacing.after {
+                out.push(' ');
             }
         }
     }
@@ -446,7 +469,7 @@ impl Visit<'_> for FormatCtx<'_, '_> {
                     ))
                 }
             };
-            let mut block = FmtBlock::default();
+            let mut block = FmtBlock::new(Spacing::BLOCK_CHILDREN);
             html.format(&mut block, self)?;
 
             self.print_text("{", opening_span.end())?;
@@ -573,7 +596,7 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     fn print_fmt_block(&mut self, mut block: FmtBlock<'src>, end: LineColumn) -> Result<()> {
         let indent = self.line_indent(self.cur_pos.line)?;
         block.determine_breaking(self.cur_pos.column - indent, indent);
-        block.print(indent, self.output);
+        block.print(Some(indent), self.output);
         self.cur_pos = end;
         let off = self.pos_to_byte_offset(end)?;
         Ok(self.cur_offset = off)
@@ -584,6 +607,9 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
         self.offsets.clear();
         self.block_starts.clear();
         self.output.push_str(rest);
+        if !self.output.ends_with('\n') {
+            self.output.push('\n');
+        }
         self.err.map(|diagnostic| FormatResult {
             filename: self.filename,
             source: self.input,
