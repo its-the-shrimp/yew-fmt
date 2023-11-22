@@ -65,23 +65,25 @@ impl Display for EmitTarget {
 #[derive(Parser)]
 #[command(name = "yew-fmt", author, about)]
 struct Cli {
-    #[arg(
-        long,
-        default_value_t,
-        value_name = "what",
-        help = "What data to emit and how",
-        next_line_help = true,
-    )]
+    /// What data to emit and how
+    #[arg(long, default_value_t, value_name = "what", next_line_help = true)]
     emit: EmitTarget,
+    /// Rust edition to use
+    // implementation note: accepted solely to be passed to rustfmt, has no effect on yew-fmt
+    #[arg(long, value_name = "edition", next_line_help = true)]
+    edition: Option<usize>,
     #[arg(required = true)]
     files: Vec<String>,
 }
 
 pub fn main() -> anyhow::Result<ExitCode> {
-    let Cli { emit, files } = Cli::parse();
-    let rustfmt = Command::new("rustfmt")
-        .args(["--emit", "stdout"])
-        .args(&files)
+    let args = Cli::parse();
+    let mut rustfmt = Command::new("rustfmt");
+    rustfmt.args(["--emit", "stdout"]);
+    if let Some(edition) = args.edition {
+        rustfmt.arg("--edition").arg(edition.to_string());
+    }
+    let rustfmt = rustfmt.args(&args.files)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -93,7 +95,7 @@ pub fn main() -> anyhow::Result<ExitCode> {
 
     let files = parse_rustfmt_output(
         from_utf8(&rustfmt.stdout).context("failed to parse rustfmt's output")?,
-        files.len()
+        args.files.len()
     );
     let mut formatter = Formatter::default();
 
@@ -103,7 +105,7 @@ pub fn main() -> anyhow::Result<ExitCode> {
         let Some(out) = res.emit_error()
             .with_context(|| format!("failed to print a syntax error in {file:?}"))?
             else { return Ok(ExitCode::FAILURE) };
-        match emit {
+        match args.emit {
             EmitTarget::Stdout =>
                 println!("{file}:\n\n{out}"),
             EmitTarget::Files =>

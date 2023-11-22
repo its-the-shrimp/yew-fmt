@@ -28,15 +28,16 @@ below will eventually become 🟩.
 | `--backup`               | ❌ |
 | `--check`                | ❌ |
 | `--color`                | ❌ |
-| `--edition`              | ❌ |
-| `--config-file`          | ❌ |
+| `--edition`              | 🟩 |
+| `--config`               | ❌ |
+| `--config-path`          | ❌ |
 | `--emit files`           | 🟩 |
 | `--emit json`            | ❌ |
 | `--emit stdout`          | 🟩 |
 | `--error-on-unformatted` | ❌ |
 | `--file-lines`           | ❌ |
 | `--files-with-diff`      | ❌ |
+| `--print-config`         | ❌ |
 | `--verbose`              | ❌ |
 | `--quiet`                | ❌ |
-| `--config`               | ❌ |
 
