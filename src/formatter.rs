@@ -4,11 +4,11 @@ use codespan_reporting::diagnostic::{Diagnostic, Label};
 use codespan_reporting::term::{emit, termcolor::{StandardStream, ColorChoice}, Config};
 use codespan_reporting::files::SimpleFile;
 use proc_macro2::LineColumn;
+use syn::Expr;
 use syn::{spanned::Spanned, Macro, visit::Visit};
 use crate::html::*;
 
 trait Format<'src> {
-    /// Returned position is the end of the syntax tree node, returned to not search for it twice
     fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()>;
 }
 
@@ -142,7 +142,11 @@ impl<'src> Format<'src> for HtmlProp {
             HtmlPropKind::Expr(name, _, expr) => {
                 block.add_spanned_with_sep(ctx, name.iter(), "-")?;
                 block.add_text("=");
-                expr.format(block, ctx)
+                if matches!(expr.expr, Expr::Lit(_)) {
+                    block.add_spanned(ctx, &expr.expr)
+                } else {
+                    expr.format(block, ctx)
+                }
             }
         }
     }

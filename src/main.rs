@@ -107,7 +107,7 @@ pub fn main() -> anyhow::Result<ExitCode> {
             EmitTarget::Stdout =>
                 println!("{file}:\n\n{out}"),
             EmitTarget::Files =>
-                _ = OpenOptions::new().write(true).open(file)
+                _ = OpenOptions::new().write(true).truncate(true).open(file)
                     .with_context(|| format!("failed to open {file:?} for writing"))?
                     .write(out.as_bytes())
                     .with_context(|| format!("failed to write to {file:?}"))?,
