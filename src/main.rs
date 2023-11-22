@@ -72,7 +72,6 @@ struct Cli {
     // implementation note: accepted solely to be passed to rustfmt, has no effect on yew-fmt
     #[arg(long, value_name = "edition", next_line_help = true)]
     edition: Option<usize>,
-    #[arg(required = true)]
     files: Vec<String>,
 }
 
@@ -93,16 +92,22 @@ pub fn main() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     }
 
-    let files = parse_rustfmt_output(
-        from_utf8(&rustfmt.stdout).context("failed to parse rustfmt's output")?,
-        args.files.len()
-    );
+    let stdout = from_utf8(&rustfmt.stdout).context("failed to parse rustfmt's output")?;
     let mut formatter = Formatter::default();
 
-    for (&file, &src) in files.iter() {
-        let res = formatter.format(file, src)
-            .with_context(|| format!("failed to parse {file:?}"))?;
-        let Some(out) = res.emit_error()
+    if args.files.is_empty() {
+        let Some(out) = formatter.format("<stdin>", stdout)
+            .context("failed to parse the input")?
+            .emit_error()
+            .context("failed to print a syntax error in the input")?
+            else { return Ok(ExitCode::FAILURE) };
+        print!("{out}");
+    }
+
+    for (&file, &src) in parse_rustfmt_output(stdout, args.files.len()).iter() {
+        let Some(out) = formatter.format(file, src)
+            .with_context(|| format!("failed to parse {file:?}"))?
+            .emit_error()
             .with_context(|| format!("failed to print a syntax error in {file:?}"))?
             else { return Ok(ExitCode::FAILURE) };
         match args.emit {
