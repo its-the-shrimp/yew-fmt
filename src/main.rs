@@ -8,11 +8,13 @@ use std::{
     collections::HashMap,
     str::from_utf8,
     fmt::{Display, self},
-    fs::OpenOptions,
+    fs::{OpenOptions, self},
     io::Write,
 };
-use anyhow::Context;
+use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
+use codespan_reporting::term::termcolor::{ColorSpec, Color, BufferWriter, ColorChoice, WriteColor, Buffer};
+use diffy::{create_patch, Line};
 use formatter::Formatter;
 
 fn parse_rustfmt_output<'a>(
@@ -46,6 +48,34 @@ fn parse_rustfmt_output<'a>(
     res
 }
 
+fn print_diff_for_file(out: &mut Buffer, file: &str, new_text: &str) -> Result<()> {
+    let src = fs::read(file).context("failed to read source file's contents")?;
+    let src = String::from_utf8(src).context("the source file is not UTF-8")?;
+    let patch = create_patch(&src, new_text);
+
+    let mut color_spec = ColorSpec::new();
+    Ok(for hunk in patch.hunks() {
+        writeln!(out, "Diff in {file} at line {}:", hunk.old_range().start())
+            .context("failed to write a diff header")?;
+        for line in hunk.lines() {
+            let (prefix, color, line) = match *line {
+                Line::Context(line) => (' ', None, line),
+                Line::Delete(line) => ('-', Some(Color::Red), line),
+                Line::Insert(line) => ('+', Some(Color::Green), line),
+            };
+            color_spec.set_fg(color);
+            out.set_color(&color_spec).context("failed to change diff buffer's color")?;
+            write!(out, "{prefix}{line}")
+                .context("failed to write a diff line")?;
+            if !line.ends_with('\n') {
+                writeln!(out).context("failed to put a newline")?;
+            }
+        }
+        color_spec.set_fg(None);
+        out.set_color(&color_spec).context("failed to reset diff buffer's color")?;
+    })
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 enum EmitTarget {
     #[default]
@@ -63,20 +93,24 @@ impl Display for EmitTarget {
 }
 
 #[derive(Parser)]
-#[command(name = "yew-fmt", author, about)]
+#[command(name = "yew-fmt", author, version, about)]
 struct Cli {
+    /// Run in 'check' mode. Exits with 0 if input is formatted correctly. Exits with 1 and prints
+    /// a diff if formatting is required.
+    #[arg(long, next_line_help = true, requires = "files")]
+    check: bool,
+    /// Rust edition to use
+    #[arg(long, value_name = "edition", next_line_help = true)]
+    edition: Option<usize>,
     /// What data to emit and how
     #[arg(long, default_value_t, value_name = "what", next_line_help = true)]
     emit: EmitTarget,
-    /// Rust edition to use
-    // implementation note: accepted solely to be passed to rustfmt, has no effect on yew-fmt
-    #[arg(long, value_name = "edition", next_line_help = true)]
-    edition: Option<usize>,
     files: Vec<String>,
 }
 
 pub fn main() -> anyhow::Result<ExitCode> {
     let args = Cli::parse();
+
     let mut rustfmt = Command::new("rustfmt");
     rustfmt.args(["--emit", "stdout"]);
     if let Some(edition) = args.edition {
@@ -104,12 +138,24 @@ pub fn main() -> anyhow::Result<ExitCode> {
         print!("{out}");
     }
 
+    let mut diff = args.check.then(|| {
+        let writer = BufferWriter::stderr(ColorChoice::Auto);
+        (writer.buffer(), writer)
+    });
+
     for (&file, &src) in parse_rustfmt_output(stdout, args.files.len()).iter() {
         let Some(out) = formatter.format(file, src)
             .with_context(|| format!("failed to parse {file:?}"))?
             .emit_error()
             .with_context(|| format!("failed to print a syntax error in {file:?}"))?
             else { return Ok(ExitCode::FAILURE) };
+
+        if let Some((buf, _)) = diff.as_mut() {
+            print_diff_for_file(buf, file, out)
+                .with_context(|| format!("failed to generate a diff for {file:?}"))?;
+            continue;
+        }
+
         match args.emit {
             EmitTarget::Stdout =>
                 println!("{file}:\n\n{out}"),
@@ -120,5 +166,11 @@ pub fn main() -> anyhow::Result<ExitCode> {
                     .with_context(|| format!("failed to write to {file:?}"))?,
         }
     }
-    Ok(ExitCode::SUCCESS)
+
+    if let Some((buf, writer)) = diff {
+        writer.print(&buf).context("failed to print the diff")
+            .map(|_| ExitCode::FAILURE)
+    } else {
+        Ok(ExitCode::SUCCESS)
+    }
 }
