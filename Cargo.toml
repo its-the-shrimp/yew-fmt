@@ -3,6 +3,9 @@ name = "yew-fmt"
 version = "0.1.0"
 edition = "2021"
 authors = ["Tim Kurdov <tim.kurdov@gmail.com>"]
+repository = "https://github.com/schvv31n/yew-fmt"
+license = "MIT"
+keywords = ["yew", "formatter"]
 categories = ["development-tools"]
 description = "Code formatter for the Yew framework"
 
