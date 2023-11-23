@@ -33,7 +33,7 @@ below will eventually become 🟩.
 |:--:|:--:|
 | `--backup`               | ❌ |
 | `--check`                | 🟩 |
-| `--color`                | ❌ |
+| `--color`                | 🟩 |
 | `--edition`              | 🟩 |
 | `--config`               | ❌ |
 | `--config-path`          | ❌ |

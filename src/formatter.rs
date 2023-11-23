@@ -1,7 +1,8 @@
 use std::fmt::Write;
 use anyhow::{Context, Result, bail};
 use codespan_reporting::diagnostic::{Diagnostic, Label};
-use codespan_reporting::term::{emit, termcolor::{StandardStream, ColorChoice}, Config};
+use codespan_reporting::term::termcolor::WriteColor;
+use codespan_reporting::term::{emit, Config};
 use codespan_reporting::files::SimpleFile;
 use proc_macro2::LineColumn;
 use syn::Expr;
@@ -630,14 +631,12 @@ pub struct FormatResult<'fmt, 'src> {
 impl<'fmt, 'src> FormatResult<'fmt, 'src> {
     /// if the result is an error, write it into stderr, if it's successfully formatted code,
     /// return it
-    pub fn emit_error(self) -> Result<Option<&'fmt str>> {
+    pub fn emit_error(self, writer: &mut dyn WriteColor) -> Result<Option<&'fmt str>> {
         let diagnostic = match self.output {
             Ok(out) => return Ok(Some(out)),
             Err(x) => x,
         };
-        let mut writer = StandardStream::stderr(ColorChoice::Auto);
-        emit(
-            &mut writer,
+        emit(writer,
             &Config::default(),
             &SimpleFile::new(self.filename, self.source),
             &diagnostic
