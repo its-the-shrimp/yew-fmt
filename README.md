@@ -31,7 +31,7 @@ below will eventually become 🟩.
 
 | CLI option | support |
 |:--:|:--:|
-| `--backup`               | ❌ |
+| `--backup`               | 🟩 |
 | `--check`                | 🟩 |
 | `--color`                | 🟩 |
 | `--edition`              | 🟩 |
@@ -40,7 +40,6 @@ below will eventually become 🟩.
 | `--emit files`           | 🟩 |
 | `--emit stdout`          | 🟩 |
 | `--error-on-unformatted` | ❌ |
-| `--file-lines`           | ❌ |
 | `--files-with-diff`      | ❌ |
 | `--print-config`         | ❌ |
 | `--verbose`              | ❌ |

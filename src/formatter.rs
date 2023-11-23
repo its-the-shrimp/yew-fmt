@@ -5,7 +5,6 @@ use codespan_reporting::term::termcolor::WriteColor;
 use codespan_reporting::term::{emit, Config};
 use codespan_reporting::files::SimpleFile;
 use proc_macro2::LineColumn;
-use syn::Expr;
 use syn::{spanned::Spanned, Macro, visit::Visit};
 use crate::html::*;
 
@@ -22,218 +21,8 @@ fn print_break(out: &mut String, indent: usize) {
     }
 }
 
-trait Format<'src> {
+pub trait Format<'src> {
     fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()>;
-}
-
-impl<'src> Format<'src> for Html {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        match self {
-            Html::Tree(tree) => tree.format(block, ctx),
-            Html::Value(val) => val.format(block, ctx),
-        }
-    }
-}
-
-impl<'src> Format<'src> for HtmlTree {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        match self {
-            HtmlTree::Element(e) => e.format(block, ctx),
-            HtmlTree::Block(b) => b.format(block, ctx),
-            HtmlTree::If(i) => i.format(block, ctx),
-        }
-    }
-}
-
-impl<'src> Format<'src> for HtmlElement {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        match self {
-            HtmlElement::Fragment(f) => f.format(block, ctx),
-            HtmlElement::Dynamic(d) =>  d.format(block, ctx),
-            HtmlElement::Literal(l) =>  l.format(block, ctx),
-        }
-    }
-}
-
-impl<'src> Format<'src> for HtmlFragment {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        block.add_spanned(ctx, &self.lt_token)?;
-        if let Some(key) = &self.key {
-            key.format(block, ctx)?;
-        }
-        block.add_spanned(ctx, &self.gt_token)?;
-
-        block.add_block(Spacing::ELEMENT_CHILDREN, |block| anyhow::Ok({
-            for child in &self.children {
-                child.format(block, ctx)?;
-                block.add_sep();
-            }
-        }))?;
-
-        block.add_spanned(ctx, &self.closing_lt_token)?;
-        block.add_spanned(ctx, &self.div_token)?;
-        block.add_spanned(ctx, &self.closing_gt_token)
-    }
-}
-
-impl<'src> Format<'src> for HtmlDynamicElement {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        block.add_text("<@");
-        self.name.format(block, ctx)?;
-        let self_closing = self.closing_tag.is_none() || self.children.is_empty();
-
-        block.add_block(Spacing::props(self_closing), |block| anyhow::Ok({
-            for prop in &self.props {
-                prop.format(block, ctx)?;
-                block.add_sep();
-            }
-        }))?;
-
-        Ok(if self_closing {
-            block.add_text("/>");
-        } else {
-            block.add_text(">");
-            block.add_block(Spacing::ELEMENT_CHILDREN, |block| anyhow::Ok({
-                for child in &self.children {
-                    child.format(block, ctx)?;
-                    block.add_sep();
-                }
-            }))?;
-            block.add_text("</@>");
-        })
-    }
-}
-
-impl<'src> Format<'src> for HtmlLiteralElement {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        block.add_text("<");
-        block.add_spanned_iter(ctx, self.name.clone())?;
-        let self_closing = self.closing_tag.is_none() || self.children.is_empty();
-
-        block.add_block(Spacing::props(self_closing), |block| anyhow::Ok({
-            for prop in &self.props {
-                prop.format(block, ctx)?;
-                block.add_sep();
-            }
-            if let Some((_, base)) = &self.prop_base {
-                block.add_text("..");
-                block.add_spanned(ctx, base)?;
-            }
-        }))?;
-        
-
-        Ok(if self_closing {
-            block.add_text("/>");
-        } else {
-            block.add_text(">");
-            block.add_block(Spacing::ELEMENT_CHILDREN, |block| anyhow::Ok({
-                for child in &self.children {
-                    child.format(block, ctx)?;
-                    block.add_sep();
-                }
-            }))?;
-            block.add_text("</");
-            block.add_spanned_iter(ctx, self.name.clone())?;
-            block.add_text(">");
-        })
-    }
-}
-
-impl<'src> Format<'src> for HtmlProp {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        if self.access_spec.is_some() {
-            block.add_text("~");
-        }
-        match &self.kind {
-            HtmlPropKind::Shortcut(_, name) => {
-                block.add_text("{");
-                block.add_spanned_with_sep(ctx, name.iter(), "-")?;
-                Ok(block.add_text("}"))
-            }
-            HtmlPropKind::Literal(name, _, lit) => {
-                block.add_spanned_with_sep(ctx, name.iter(), "-")?;
-                block.add_text("=");
-                block.add_spanned(ctx, &lit)
-            }
-            HtmlPropKind::Expr(name, _, expr) => {
-                block.add_spanned_with_sep(ctx, name.iter(), "-")?;
-                block.add_text("=");
-                if matches!(expr.expr, Expr::Lit(_)) {
-                    block.add_spanned(ctx, &expr.expr)
-                } else {
-                    expr.format(block, ctx)
-                }
-            }
-        }
-    }
-}
-
-impl<'src> Format<'src> for BracedExpr {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        block.add_text("{");
-        block.add_spanned(ctx, &self.expr)?;
-        Ok(block.add_text("}"))
-    }
-}
-
-impl<'src> Format<'src> for HtmlBlock {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        block.add_text("{ ");
-        self.content.format(block, ctx)?;
-        Ok(block.add_text(" }"))
-    }
-}
-
-impl<'src> Format<'src> for HtmlBlockContent {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        match self {
-            Self::Expr(e) => block.add_spanned(ctx, e),
-            Self::Iterable(_, e) => {
-                block.add_text("for ");
-                block.add_spanned(ctx, e)
-            }
-        }
-    }
-}
-
-impl<'src> Format<'src> for HtmlIf {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        block.add_text("if ");
-        block.add_spanned(ctx, &self.condition)?;
-        block.add_text(" {");
-        block.add_block(Spacing::BLOCK_CHILDREN, |block| anyhow::Ok({
-            for child in &self.then_branch {
-                child.format(block, ctx)?;
-                block.add_sep();
-            }
-        }))?;
-
-        if let Some(else_branch) = &self.else_branch {
-            block.add_text("} ");
-            else_branch.format(block, ctx)
-        } else {
-            Ok(block.add_text("}"))
-        }
-    }
-}
-
-impl<'src> Format<'src> for HtmlElse {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        block.add_text("else ");
-        Ok(match self {
-            Self::If(_, r#if) => r#if.format(block, ctx)?,
-            Self::Tree(.., children) => {
-                block.add_text("{");
-                block.add_block(Spacing::BLOCK_CHILDREN, |block| anyhow::Ok({
-                    for child in children {
-                        child.format(block, ctx)?;
-                        block.add_sep();
-                    }
-                }))?;
-                block.add_text("}");
-            }
-        })
-    }
 }
 
 /// Doesn't store any context by itself, exists only to reuse allocations effeciently
@@ -259,27 +48,20 @@ enum FmtToken<'src> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
-struct Spacing {
-    before: bool,
-    between: bool,
-    after: bool,
+pub struct Spacing {
+    pub before: bool,
+    pub between: bool,
+    pub after: bool,
 }
 
 impl Spacing {
-    const ELEMENT_CHILDREN: Self = Self { before: false, between: false, after: false };
-    const   BLOCK_CHILDREN: Self = Self { before: true,  between: false, after: true  };
-
-    const fn props(self_closing: bool) -> Self {
-        Self { before: true, between: true, after: self_closing }
-    }
-
     const fn around(&self) -> bool {
         self.before && self.after
     }
 }
 
 #[derive(PartialEq, Eq)]
-struct FmtBlock<'src> {
+pub struct FmtBlock<'src> {
     // TODO: find a way to reuse this allocation
     tokens: Vec<FmtToken<'src>>,
     width: usize,
@@ -297,18 +79,18 @@ impl<'src> FmtBlock<'src> {
         }
     }
 
-    fn add_text(&mut self, text: &'src str) {
+    pub fn add_text(&mut self, text: &'src str) {
         self.tokens.push(FmtToken::Text(text));
         self.width += text.len();
     }
 
-    fn add_sep(&mut self) {
+    pub fn add_sep(&mut self) {
         self.tokens.push(FmtToken::Sep);
         self.width += self.spacing.between as usize;
     }
 
     /// adds a block and gives a mutable reference to it to `f`
-    fn add_block<R>(&mut self, spacing: Spacing, f: impl FnOnce(&mut Self) -> R) -> R {
+    pub fn add_block<R>(&mut self, spacing: Spacing, f: impl FnOnce(&mut Self) -> R) -> R {
         let mut block = Self::new(spacing);
         let res = f(&mut block);
         if block.tokens.last() == Some(&FmtToken::Sep) {
@@ -319,14 +101,14 @@ impl<'src> FmtBlock<'src> {
         res
     }
 
-    fn add_spanned(&mut self, ctx: &FormatCtx<'_, 'src>, token: &impl Spanned) -> Result<()> {
+    pub fn add_spanned(&mut self, ctx: &FormatCtx<'_, 'src>, token: &impl Spanned) -> Result<()> {
         let span = token.span();
         let text = ctx.source_code(span.start(), span.end())
             .context("failed to get a token's source code")?;
         Ok(self.add_text(text))
     }
 
-    fn add_spanned_iter(
+    pub fn add_spanned_iter(
         &mut self,
         ctx: &FormatCtx<'_, 'src>,
         iter: impl IntoIterator<Item = impl Spanned>,
@@ -336,7 +118,7 @@ impl<'src> FmtBlock<'src> {
         })
     }
 
-    fn add_spanned_with_sep(
+    pub fn add_spanned_with_sep(
         &mut self,
         ctx: &FormatCtx<'_, 'src>,
         iter: impl IntoIterator<Item = impl Spanned>,
@@ -421,7 +203,7 @@ impl<'src> FmtBlock<'src> {
     }
 }
 
-struct FormatCtx<'fmt, 'src> {
+pub struct FormatCtx<'fmt, 'src> {
     /// for error reporting purposes
     filename: &'src str,
     /// maps line number to byte offset in `input`
@@ -470,7 +252,7 @@ impl Visit<'_> for FormatCtx<'_, '_> {
                     ))
                 }
             };
-            let mut block = FmtBlock::new(Spacing::BLOCK_CHILDREN);
+            let mut block = FmtBlock::new(Spacing::default());
             html.format(&mut block, self)?;
 
             self.print_text("{", opening_span.end())?;

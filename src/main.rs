@@ -9,7 +9,8 @@ use std::{
     str::from_utf8,
     fmt::{Display, self, Arguments},
     fs::{OpenOptions, self},
-    io::{Write, self, IoSlice},
+    io::{Write, self, IoSlice, Read, Seek},
+    path::Path,
 };
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum, ColorChoice as ColorWhen};
@@ -139,6 +140,23 @@ fn print_diff_for_file(
     })
 }
 
+/// like `std::fs::write`, but will also create a `.bk` file
+fn write_with_backup(filename: &str, new_text: &[u8]) -> Result<()> {
+    let mut file = OpenOptions::new().read(true).write(true).open(filename)
+        .context("failed to open the file")?;
+    let mut old_text = vec![];
+    file.read_to_end(&mut old_text).context("failed to read the file")?;
+    Ok(if &old_text[..] != new_text {
+        let backup = Path::new(filename).with_extension("bk");
+        fs::write(&backup, old_text)
+            .with_context(||
+                format!("failed to create a backup file {:?}", backup.as_os_str()))?;
+        file.rewind().context("failed to rewind the file handle")?;
+        file.set_len(0).context("failed to clear the file")?;
+        file.write_all(new_text).context("failed to write new data to the file")?;
+    })
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 enum EmitTarget {
     #[default]
@@ -158,6 +176,9 @@ impl Display for EmitTarget {
 #[derive(Parser)]
 #[command(name = "yew-fmt", author, version, about)]
 struct Cli {
+    /// Backup any modified files
+    #[arg(long, next_line_help = true, requires = "files", conflicts_with = "check")]
+    backup: bool,
     /// Use colored output (if supported)
     #[arg(long, default_value_t, value_name = "when", next_line_help = true)]
     color: ColorWhen,
@@ -227,11 +248,13 @@ pub fn main() -> anyhow::Result<ExitCode> {
         match args.emit {
             EmitTarget::Stdout =>
                 println!("{file}:\n\n{out}"),
-            EmitTarget::Files =>
-                _ = OpenOptions::new().write(true).truncate(true).open(file)
-                    .with_context(|| format!("failed to open {file:?} for writing"))?
-                    .write(out.as_bytes())
-                    .with_context(|| format!("failed to write to {file:?}"))?,
+            EmitTarget::Files => if args.backup {
+                write_with_backup(file, out.as_bytes())
+                    .with_context(|| format!("failed to write to {file:?} with backup"))?;
+            } else {
+                fs::write(file, out)
+                    .with_context(|| format!("failed to write to {file:?}"))?;
+            }
         }
     }
 
