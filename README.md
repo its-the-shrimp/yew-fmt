@@ -4,7 +4,7 @@
 it applies formatting to the HTML in [`yew::html!`](https://docs.rs/yew/latest/yew/macro.html.html) and [`yew::html_nested!`](https://docs.rs/yew/latest/yew/macro.html_nested.html).
 
 ## Install `yew-fmt`
-Installing it as easy as 
+Installing it is as easy as
 ```console
 cargo install yew-fmt
 ```
@@ -34,14 +34,14 @@ below will eventually become 🟩.
 | `--backup`               | 🟩 |
 | `--check`                | 🟩 |
 | `--color`                | 🟩 |
-| `--edition`              | 🟩 |
 | `--config`               | ❌ |
 | `--config-path`          | ❌ |
+| `--edition`              | 🟩 |
 | `--emit files`           | 🟩 |
 | `--emit stdout`          | 🟩 |
 | `--error-on-unformatted` | ❌ |
-| `--files-with-diff`      | ❌ |
+| `--files-with-diff`      | 🟩 |
 | `--print-config`         | ❌ |
 | `--verbose`              | ❌ |
-| `--quiet`                | ❌ |
+| `--quiet`                | 🟩 |
 

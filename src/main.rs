@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     str::from_utf8,
     fmt::{Display, self, Arguments},
-    fs::{OpenOptions, self},
+    fs::{OpenOptions, self, File},
     io::{Write, self, IoSlice, Read, Seek},
     path::Path,
 };
@@ -109,14 +109,21 @@ fn parse_rustfmt_output<'a>(
     res
 }
 
+/// like `fs::read`, but allows for reusing allocations
+fn read_into(file: &str, dst: &mut Vec<u8>) -> io::Result<()> {
+    File::open(file)?.read_to_end(dst).map(drop)
+}
+
+// `buf` must be passed into the function empty and is guaranteed to be empty after it
 fn print_diff_for_file(
+    buf: &mut Vec<u8>,
     out: &mut impl WriteColor,
     file: &str,
-    new_text: &str
+    new_text: &str,
 ) -> Result<()> {
-    let src = fs::read(file).context("failed to read source file's contents")?;
-    let src = String::from_utf8(src).context("the source file is not UTF-8")?;
-    let patch = create_patch(&src, new_text);
+    read_into(file, buf).context("failed to read contents of the source file")?;
+    let src = from_utf8(buf).context("the source file is not UTF-8")?;
+    let patch = create_patch(src, new_text);
 
     let mut color_spec = ColorSpec::new();
     Ok(for hunk in patch.hunks() {
@@ -180,32 +187,46 @@ struct Cli {
     #[arg(long, next_line_help = true, requires = "files", conflicts_with = "check")]
     backup: bool,
     /// Use colored output (if supported)
-    #[arg(long, default_value_t, value_name = "when", next_line_help = true)]
+    #[arg(long, next_line_help = true, default_value_t, value_name = "when")]
     color: ColorWhen,
     /// Run in 'check' mode. Exits with 0 if input is formatted correctly. Exits with 1 and prints
     /// a diff if formatting is required.
     #[arg(long, next_line_help = true, requires = "files")]
     check: bool,
     /// Rust edition to use
-    #[arg(long, value_name = "edition", next_line_help = true)]
+    #[arg(long, next_line_help = true, value_name = "edition")]
     edition: Option<usize>,
     /// What data to emit and how
-    #[arg(long, default_value_t, value_name = "what", next_line_help = true)]
+    #[arg(long, next_line_help = true, default_value_t, value_name = "what")]
     emit: EmitTarget,
     files: Vec<String>,
+    /// Prints the names of mismatched files that were formatted.
+    /// Prints the names of files that would be formatted when used with `--check` mode.
+    #[arg(long, next_line_help = true, short = 'l')]
+    files_with_diff: bool,
+    /// Show less output
+    #[arg(long, short, next_line_help = true)]
+    quiet: bool,
 }
 
 pub fn main() -> anyhow::Result<ExitCode> {
     let args = Cli::parse();
-    let mut stderr = Flagged::new(BufferedStandardStream::stderr(match args.color {
+    let color_choice = match args.color {
         ColorWhen::Auto => ColorChoice::Auto,
         ColorWhen::Always => ColorChoice::Always,
         ColorWhen::Never => ColorChoice::Never,
-    }));
+    };
+    let mut stdout = Flagged::new(BufferedStandardStream::stdout(color_choice));
+    let mut stderr = BufferedStandardStream::stderr(color_choice);
+    // for reading files to get the source
+    let mut src_buf = vec![];
 
     let mut rustfmt = Command::new("rustfmt");
     if let Some(edition) = args.edition {
         rustfmt.arg("--edition").arg(edition.to_string());
+    }
+    if args.quiet {
+        rustfmt.arg("-q");
     }
     let rustfmt = rustfmt
         .args(["--emit", "stdout"])
@@ -220,11 +241,11 @@ pub fn main() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     }
 
-    let stdout = from_utf8(&rustfmt.stdout).context("failed to parse rustfmt's output")?;
+    let rustfmt_stdout = from_utf8(&rustfmt.stdout).context("failed to parse rustfmt's output")?;
     let mut formatter = Formatter::default();
 
     if args.files.is_empty() {
-        let Some(out) = formatter.format("<stdin>", stdout)
+        let Some(out) = formatter.format("<stdin>", rustfmt_stdout)
             .context("failed to parse the input")?
             .emit_error(&mut stderr)
             .context("failed to print a syntax error in the input")?
@@ -232,7 +253,7 @@ pub fn main() -> anyhow::Result<ExitCode> {
         print!("{out}");
     }
 
-    for (&file, &src) in parse_rustfmt_output(stdout, args.files.len()).iter() {
+    for (&file, &src) in parse_rustfmt_output(rustfmt_stdout, args.files.len()).iter() {
         let Some(out) = formatter.format(file, src)
             .with_context(|| format!("failed to parse {file:?}"))?
             .emit_error(&mut stderr)
@@ -240,24 +261,37 @@ pub fn main() -> anyhow::Result<ExitCode> {
             else { return Ok(ExitCode::FAILURE) };
 
         if args.check {
-            print_diff_for_file(&mut stderr, file, out)
-                .with_context(|| format!("failed to generate a diff for {file:?}"))?;
+            if args.files_with_diff {
+                read_into(file, &mut src_buf)
+                    .with_context(|| format!("failed to read the contents of {file:?}"))?;
+                if src_buf != out.as_bytes() {
+                    println!("{file}");
+                }
+            } else {
+                print_diff_for_file(&mut src_buf, &mut stdout, file, out)
+                    .with_context(|| format!("failed to generate a diff for {file:?}"))?;
+            }
             continue;
         }
 
         match args.emit {
             EmitTarget::Stdout =>
                 println!("{file}:\n\n{out}"),
-            EmitTarget::Files => if args.backup {
-                write_with_backup(file, out.as_bytes())
-                    .with_context(|| format!("failed to write to {file:?} with backup"))?;
-            } else {
-                fs::write(file, out)
-                    .with_context(|| format!("failed to write to {file:?}"))?;
+            EmitTarget::Files => {
+                if args.backup {
+                    write_with_backup(file, out.as_bytes())
+                        .with_context(|| format!("failed to write to {file:?} with backup"))?;
+                } else {
+                    fs::write(file, out)
+                        .with_context(|| format!("failed to write to {file:?}"))?;
+                }
+                if args.files_with_diff {
+                    println!("{file}");
+                }
             }
         }
     }
 
-    stderr.flush().context("failed to flush stderr")
-        .map(|_| if args.check && stderr.written {ExitCode::FAILURE} else {ExitCode::SUCCESS})
+    stdout.flush().context("failed to flush stderr")
+        .map(|_| if args.check && stdout.written {ExitCode::FAILURE} else {ExitCode::SUCCESS})
 }

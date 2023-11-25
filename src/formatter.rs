@@ -5,6 +5,7 @@ use codespan_reporting::term::termcolor::WriteColor;
 use codespan_reporting::term::{emit, Config};
 use codespan_reporting::files::SimpleFile;
 use proc_macro2::LineColumn;
+use syn::punctuated::Punctuated;
 use syn::{spanned::Spanned, Macro, visit::Visit};
 use crate::html::*;
 
@@ -19,6 +20,105 @@ fn print_break(out: &mut String, indent: usize) {
     for _ in 0 .. indent {
         out.push(' ');
     }
+}
+
+struct CommentParser<'src>(&'src str);
+
+impl<'src> Iterator for CommentParser<'src> {
+    type Item = &'src str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        /// the `usize`s are offsets into `src`
+        #[derive(Clone, Copy)]
+        enum ParserState {
+            None,
+            Start(usize),
+            Line(usize),
+            Multi(usize),
+            MultiEnd(usize)
+        }
+
+        let Self(src) = self;
+        let mut state = ParserState::None;
+        for (i, c) in src.char_indices() {
+            match c {
+                '/' => state = match state {
+                    ParserState::None => ParserState::Start(i),
+                    ParserState::Start(i) => ParserState::Line(i),
+                    ParserState::Line(_) => continue,
+                    ParserState::Multi(_) => continue,
+                    ParserState::MultiEnd(start) => {
+                        // TODO: use `str::ceil_char_boundary` here when it gets stabilised
+                        let (extracted, rest) = src.split_at(start + 1);
+                        *src = rest;
+                        return Some(unsafe { extracted.get_unchecked(start ..) })
+                    }
+                },
+
+                '*' => state = match state {
+                    ParserState::None => continue,
+                    ParserState::Start(i) => ParserState::Multi(i),
+                    ParserState::Line(_) => continue,
+                    ParserState::Multi(i) => ParserState::MultiEnd(i),
+                    ParserState::MultiEnd(_) => continue,
+                },
+
+                '\n' => state = match state {
+                    ParserState::None => continue,
+                    ParserState::Start(_) => ParserState::None,
+                    ParserState::Line(start) => {
+                        // TODO: use `str::ceil_char_boundary` here when it gets stabilised
+                        let (extracted, rest) = src.split_at(start + 1);
+                        *src = rest;
+                        return Some(unsafe { extracted.get_unchecked(start ..) })
+                    }
+                    ParserState::Multi(_) => continue,
+                    ParserState::MultiEnd(i) => ParserState::Multi(i),
+                },
+
+                _ => state = match state {
+                    ParserState::None => continue,
+                    ParserState::Start(_) => ParserState::None,
+                    ParserState::Line(_) => continue,
+                    ParserState::Multi(_) => continue,
+                    ParserState::MultiEnd(i) => ParserState::Multi(i),
+                }
+            }
+        }
+
+        *src = "";
+        None
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Location {
+    pub start: LineColumn,
+    pub end: LineColumn,
+}
+
+/// Represents an object that has an associated location in the source
+pub trait Located {
+    fn start(&self) -> LineColumn;
+    fn end(&self) -> LineColumn;
+    fn loc(&self) -> Location {
+        Location { start: self.start(), end: self.end() }
+    }
+}
+
+impl<T: Spanned> Located for T {
+    fn start(&self) -> LineColumn { self.span().start() }
+    fn end(&self) -> LineColumn { self.span().end() }
+    fn loc(&self) -> Location {
+        let span = self.span();
+        Location { start: span.start(), end: span.end() }
+    }
+}
+
+impl Located for Location {
+    fn start(&self) -> LineColumn { self.start }
+    fn end(&self) -> LineColumn { self.end }
+    fn loc(&self) -> Location { *self }
 }
 
 pub trait Format<'src> {
@@ -43,6 +143,8 @@ pub struct Formatter {
 #[derive(PartialEq, Eq)]
 enum FmtToken<'src> {
     Text(&'src str),
+    /// needs special handling of the newline
+    LineComment(&'src str),
     Sep,
     Block(FmtBlock<'src>)
 }
@@ -66,73 +168,123 @@ pub struct FmtBlock<'src> {
     tokens: Vec<FmtToken<'src>>,
     width: usize,
     broken: bool,
-    spacing: Spacing
+    spacing: Spacing,
+    /// offset into the source, useful for correct printing of comments
+    cur_offset: usize,
 }
 
 impl<'src> FmtBlock<'src> {
-    fn new(spacing: Spacing) -> Self {
+    fn new(spacing: Spacing, start_offset: usize) -> Self {
         Self {
             tokens: vec![],
             width: (spacing.before || spacing.after) as usize,
             broken: false,
             spacing,
+            cur_offset: start_offset,
         }
     }
 
-    pub fn add_text(&mut self, text: &'src str) {
+    fn add_raw_text(&mut self, text: &'src str) {
         self.tokens.push(FmtToken::Text(text));
         self.width += text.len();
     }
 
-    pub fn add_sep(&mut self) {
+    fn add_line_comment(&mut self, comment: &'src str) {
+        self.tokens.push(FmtToken::LineComment(comment));
+        self.width += comment.len() + 4;
+    }
+
+    fn add_comment(&mut self, src: &'src str, until: usize) -> Result<bool> {
+        let range = self.cur_offset .. until;
+        let comment = src.get(range.clone())
+            .with_context(|| format!("span {range:?} is out of bounds for the source"))?
+            .trim_start()
+            .trim_end_matches(' ');
+        self.cur_offset = until;
+        if comment.is_empty() { return Ok(false) }
+
+        let needs_sep = self.spacing.before && self.tokens.is_empty();
+        if let Some(comment) = comment.strip_prefix("//") {
+            self.add_line_comment(comment.trim_end_matches('\n'));
+        } else {
+            self.add_raw_text(comment)
+        }
+        if needs_sep {
+            self.add_raw_sep();
+        }
+        Ok(true)
+    }
+
+    pub fn add_space(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result<()> {
+        self.add_raw_text(" ");
+        Ok(if self.add_comment(ctx.input, ctx.pos_to_byte_offset(at)?)? {
+            self.add_raw_text(" ");
+        })
+    }
+
+    fn add_text(
+        &mut self,
+        text: &'src str,
+        ctx: &FormatCtx<'_, 'src>,
+        at: LineColumn
+    ) -> Result<()> {
+        self.add_comment(ctx.input, ctx.pos_to_byte_offset(at)?)?;
+        self.add_raw_text(text);
+        Ok(self.cur_offset += text.len())
+    }
+
+    fn add_raw_sep(&mut self) {
         self.tokens.push(FmtToken::Sep);
         self.width += self.spacing.between as usize;
     }
 
+    pub fn add_sep(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result<()> {
+        self.add_raw_sep();
+        Ok(if self.add_comment(ctx.input, ctx.pos_to_byte_offset(at)?)? {
+            self.add_raw_sep();
+        })
+    }
+
     /// adds a block and gives a mutable reference to it to `f`
     pub fn add_block<R>(&mut self, spacing: Spacing, f: impl FnOnce(&mut Self) -> R) -> R {
-        let mut block = Self::new(spacing);
+        let mut block = Self::new(spacing, self.cur_offset);
         let res = f(&mut block);
         if block.tokens.last() == Some(&FmtToken::Sep) {
             block.tokens.pop();
         }
         self.width += block.width;
+        self.cur_offset = block.cur_offset;
         self.tokens.push(FmtToken::Block(block));
         res
     }
 
-    pub fn add_spanned(&mut self, ctx: &FormatCtx<'_, 'src>, token: &impl Spanned) -> Result<()> {
-        let span = token.span();
-        let text = ctx.source_code(span.start(), span.end())
+    pub fn add_source(&mut self, ctx: &FormatCtx<'_, 'src>, loc: Location) -> Result<()> {
+        let text = ctx.source_code(loc)
             .context("failed to get a token's source code")?;
-        Ok(self.add_text(text))
+        self.add_text(text, ctx, loc.start)
     }
 
-    pub fn add_spanned_iter(
+    pub fn add_source_iter(
         &mut self,
         ctx: &FormatCtx<'_, 'src>,
-        iter: impl IntoIterator<Item = impl Spanned>,
+        iter: impl IntoIterator<Item = impl Located>,
     ) -> Result<()> {
         Ok(for obj in iter {
-            self.add_spanned(ctx, &obj)?;
+            self.add_source(ctx, obj.loc())?;
         })
     }
 
-    pub fn add_spanned_with_sep(
+    pub fn add_source_punctuated(
         &mut self,
         ctx: &FormatCtx<'_, 'src>,
-        iter: impl IntoIterator<Item = impl Spanned>,
-        sep: &'src str,
+        iter: &Punctuated<impl Located, impl Located>
     ) -> Result<()> {
-        let mut iter = iter.into_iter();
-        if let Some(first) = iter.next() {
-            self.add_spanned(ctx, &first)?;
-        }
-        for obj in iter {
-            self.add_text(sep);
-            self.add_spanned(ctx, &obj)?;
-        }
-        Ok(())
+        Ok(for pair in iter.pairs() {
+            self.add_source(ctx, pair.value().loc())?;
+            if let Some(punct) = pair.punct() {
+                self.add_source(ctx, punct.loc())?;
+            }
+        })
     }
 
     fn determine_breaking(&mut self, offset: usize, indent: usize) {
@@ -150,6 +302,7 @@ impl<'src> FmtBlock<'src> {
                     } else {
                         offset += text.len();
                     }
+                    FmtToken::LineComment(comment) => offset += comment.len() + 4,
                     FmtToken::Sep => offset = 0,
                     FmtToken::Block(block) => {
                         block.determine_breaking(offset, indent);
@@ -160,33 +313,43 @@ impl<'src> FmtBlock<'src> {
         }
     }
 
-    fn print(&self, indent: Option<usize>, out: &mut String) {
+    fn print(&self, indent: Option<usize>, src: &'src str, out: &mut String) {
         fn print_token(
             token: &FmtToken<'_>,
             indent: Option<usize>,
             spaced: bool,
+            src: &str,
             out: &mut String
         ) {
             match token {
                 FmtToken::Text(text) => out.push_str(text),
+                FmtToken::LineComment(comment) => if let Some(indent) = indent {
+                    out.push_str("//");
+                    out.push_str(comment);
+                    print_break(out, indent)
+                } else {
+                    out.push_str("/*");
+                    out.push_str(comment);
+                    out.push_str("*/")
+                }
                 FmtToken::Sep => if let Some(indent) = indent {
                     print_break(out, indent)
                 } else if spaced {
-                    out.push(' ');
+                    out.push(' ')
                 }
-                FmtToken::Block(block) => block.print(indent, out)
+                FmtToken::Block(block) => block.print(indent, src, out)
             }
         }
 
         if self.tokens.is_empty() {
-            if self.spacing.after || self.spacing.before {
+            if self.spacing.around() {
                 out.push(' ');
             }
         } else if let Some(old_indent) = indent.filter(|_| self.broken) {
             let new_indent = old_indent + Formatter::INDENT_STEP;
             print_break(out, new_indent);
             for token in &self.tokens {
-                print_token(token, Some(new_indent), false, out);
+                print_token(token, Some(new_indent), false, src, out);
             }
             print_break(out, old_indent);
         } else {
@@ -194,7 +357,7 @@ impl<'src> FmtBlock<'src> {
                 out.push(' ');
             }
             for token in &self.tokens {
-                print_token(token, None, self.spacing.between, out);
+                print_token(token, None, self.spacing.between, src, out);
             }
             if self.spacing.after {
                 out.push(' ');
@@ -252,10 +415,14 @@ impl Visit<'_> for FormatCtx<'_, '_> {
                     ))
                 }
             };
-            let mut block = FmtBlock::new(Spacing::default());
+            let html_start = opening_span.end();
+            let mut block = FmtBlock::new(
+                Spacing::default(),
+                self.pos_to_byte_offset(html_start)?
+            );
             html.format(&mut block, self)?;
 
-            self.print_text("{", opening_span.end())?;
+            self.print_text("{", html_start)?;
             self.print_fmt_block(block, closing_span.start())?;
             self.print_text("}", closing_span.end())?;
             Ok(None)
@@ -303,10 +470,10 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
                 format!("source position {line}:{column} can't be converted to a byte offset"))
     }
 
-    fn source_code(&self, start: LineColumn, end: LineColumn) -> Result<&'src str> {
-        let start = self.pos_to_byte_offset(start)
+    fn source_code(&self, loc: Location) -> Result<&'src str> {
+        let start = self.pos_to_byte_offset(loc.start)
             .context("failed to find the start of the span")?;
-        let end = self.pos_to_byte_offset(end)
+        let end = self.pos_to_byte_offset(loc.end)
             .context("failed to find the end of the span")?;
         self.input.get(start .. end)
             .with_context(|| format!("byte range {start}..{end} is invalid for the source code"))
@@ -379,7 +546,7 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     fn print_fmt_block(&mut self, mut block: FmtBlock<'src>, end: LineColumn) -> Result<()> {
         let indent = self.line_indent(self.cur_pos.line)?;
         block.determine_breaking(self.cur_pos.column - indent, indent);
-        block.print(Some(indent), self.output);
+        block.print(Some(indent), self.input, self.output);
         self.cur_pos = end;
         let off = self.pos_to_byte_offset(end)?;
         Ok(self.cur_offset = off)
