@@ -2,11 +2,12 @@ use std::fmt::Write;
 use anyhow::{Context, Result, bail};
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use codespan_reporting::term::termcolor::WriteColor;
-use codespan_reporting::term::{emit, Config};
+use codespan_reporting::term;
 use codespan_reporting::files::SimpleFile;
 use proc_macro2::LineColumn;
 use syn::punctuated::Punctuated;
 use syn::{spanned::Spanned, Macro, visit::Visit};
+use crate::config::Config;
 use crate::html::*;
 
 /// Returns the length of the last line of the string, or None if the string has only 1 line
@@ -125,13 +126,11 @@ pub trait Format<'src> {
     fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()>;
 }
 
-/// Doesn't store any context by itself, exists only to reuse allocations effeciently
-#[derive(Default)]
+/// Stores the config and allocated memory to reuse it between reformatting
 pub struct Formatter {
+    config: Config,
     /// maps line number to byte offset in `input`
     offsets: Vec<usize>,
-    /// stack with starting indices of formatting blocks
-    block_starts: Vec<usize>,
     /// for temporary strings to reuse allocations
     temp_str_buf: String,
     /// the formatted code
@@ -287,13 +286,13 @@ impl<'src> FmtBlock<'src> {
         })
     }
 
-    fn determine_breaking(&mut self, offset: usize, indent: usize) {
+    fn determine_breaking(&mut self, ctx: &FormatCtx<'_, 'src>, offset: usize, indent: usize) {
         let max_width = offset + indent + self.width
             + (self.spacing.around() && !self.tokens.is_empty()) as usize;
-        if max_width > Formatter::MAX_WIDTH {
+        if max_width > ctx.config.yew.html_width {
             self.broken = true;
             self.width = 0;
-            let indent = indent + Formatter::INDENT_STEP;
+            let indent = indent + ctx.config.tab_spaces;
             let mut offset = 0;
             for token in &mut self.tokens {
                 match token {
@@ -305,7 +304,7 @@ impl<'src> FmtBlock<'src> {
                     FmtToken::LineComment(comment) => offset += comment.len() + 4,
                     FmtToken::Sep => offset = 0,
                     FmtToken::Block(block) => {
-                        block.determine_breaking(offset, indent);
+                        block.determine_breaking(ctx, offset, indent);
                         offset += block.width;
                     }
                 }
@@ -313,12 +312,12 @@ impl<'src> FmtBlock<'src> {
         }
     }
 
-    fn print(&self, indent: Option<usize>, src: &'src str, out: &mut String) {
+    fn print(&self, indent: Option<usize>, cfg: &Config, out: &mut String) {
         fn print_token(
             token: &FmtToken<'_>,
             indent: Option<usize>,
             spaced: bool,
-            src: &str,
+            cfg: &Config,
             out: &mut String
         ) {
             match token {
@@ -337,7 +336,7 @@ impl<'src> FmtBlock<'src> {
                 } else if spaced {
                     out.push(' ')
                 }
-                FmtToken::Block(block) => block.print(indent, src, out)
+                FmtToken::Block(block) => block.print(indent, cfg, out)
             }
         }
 
@@ -346,10 +345,10 @@ impl<'src> FmtBlock<'src> {
                 out.push(' ');
             }
         } else if let Some(old_indent) = indent.filter(|_| self.broken) {
-            let new_indent = old_indent + Formatter::INDENT_STEP;
+            let new_indent = old_indent + cfg.tab_spaces;
             print_break(out, new_indent);
             for token in &self.tokens {
-                print_token(token, Some(new_indent), false, src, out);
+                print_token(token, Some(new_indent), false, cfg, out);
             }
             print_break(out, old_indent);
         } else {
@@ -357,7 +356,7 @@ impl<'src> FmtBlock<'src> {
                 out.push(' ');
             }
             for token in &self.tokens {
-                print_token(token, None, self.spacing.between, src, out);
+                print_token(token, None, self.spacing.between, cfg, out);
             }
             if self.spacing.after {
                 out.push(' ');
@@ -367,12 +366,11 @@ impl<'src> FmtBlock<'src> {
 }
 
 pub struct FormatCtx<'fmt, 'src> {
+    config: &'fmt Config,
     /// for error reporting purposes
     filename: &'src str,
     /// maps line number to byte offset in `input`
     offsets: &'fmt mut Vec<usize>,
-    /// stack of starting indices of formatting blocks
-    block_starts: &'fmt mut Vec<usize>,
     /// for temporary strings to reuse allocations
     temp_str_buf: &'fmt mut String,
     /// the formatted code
@@ -431,8 +429,9 @@ impl Visit<'_> for FormatCtx<'_, '_> {
 }
 
 impl Formatter {
-    const INDENT_STEP: usize = 4;
-    const MAX_WIDTH: usize = 100;
+    pub fn new(config: Config) -> Self {
+        Self { config, offsets: vec![], temp_str_buf: String::new(), output: String::new() }
+    }
 
     pub fn format<'fmt, 'src: 'fmt>(
         &'fmt mut self,
@@ -441,8 +440,8 @@ impl Formatter {
     ) -> Result<FormatResult<'fmt, 'src>> {
         self.output.clear();
         let mut ctx = FormatCtx {
+            config: &self.config,
             offsets: &mut self.offsets,
-            block_starts: &mut self.block_starts,
             temp_str_buf: &mut self.temp_str_buf,
             output: &mut self.output,
             filename,
@@ -545,8 +544,8 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     // `end` is the position in the source file asssumed to be the end of the formatted sequence
     fn print_fmt_block(&mut self, mut block: FmtBlock<'src>, end: LineColumn) -> Result<()> {
         let indent = self.line_indent(self.cur_pos.line)?;
-        block.determine_breaking(self.cur_pos.column - indent, indent);
-        block.print(Some(indent), self.input, self.output);
+        block.determine_breaking(self, self.cur_pos.column - indent, indent);
+        block.print(Some(indent), self.config, self.output);
         self.cur_pos = end;
         let off = self.pos_to_byte_offset(end)?;
         Ok(self.cur_offset = off)
@@ -555,7 +554,6 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     fn finalise(self) -> Result<FormatResult<'fmt, 'src>> {
         let rest = unsafe { self.input.get_unchecked(self.cur_offset ..) };
         self.offsets.clear();
-        self.block_starts.clear();
         self.output.push_str(rest);
         if !self.output.ends_with('\n') {
             self.output.push('\n');
@@ -585,8 +583,8 @@ impl<'fmt, 'src> FormatResult<'fmt, 'src> {
             Ok(out) => return Ok(Some(out)),
             Err(x) => x,
         };
-        emit(writer,
-            &Config::default(),
+        term::emit(writer,
+            &term::Config::default(),
             &SimpleFile::new(self.filename, self.source),
             &diagnostic
         )?;

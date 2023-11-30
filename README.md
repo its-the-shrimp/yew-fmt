@@ -34,12 +34,11 @@ below will eventually become 🟩.
 | `--backup`               | 🟩 |
 | `--check`                | 🟩 |
 | `--color`                | 🟩 |
-| `--config`               | ❌ |
-| `--config-path`          | ❌ |
+| `--config`               | 🟩 |
+| `--config-path`          | 🟩 |
 | `--edition`              | 🟩 |
 | `--emit files`           | 🟩 |
 | `--emit stdout`          | 🟩 |
-| `--error-on-unformatted` | ❌ |
 | `--files-with-diff`      | 🟩 |
 | `--print-config`         | ❌ |
 | `--verbose`              | ❌ |

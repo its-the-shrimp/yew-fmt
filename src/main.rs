@@ -2,20 +2,22 @@
 
 mod formatter;
 mod html;
+mod config;
 
 use std::{
     process::{ExitCode, Command, Stdio},
     collections::HashMap,
     str::from_utf8,
     fmt::{Display, self, Arguments},
-    fs::{OpenOptions, self, File},
+    fs::{File, write},
     io::{Write, self, IoSlice, Read, Seek},
-    path::Path,
+    path::{Path, PathBuf}
 };
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum, ColorChoice as ColorWhen};
 use codespan_reporting::term::termcolor::{ColorSpec, Color, ColorChoice, WriteColor,
     BufferedStandardStream, HyperlinkSpec};
+use config::Config;
 use diffy::{create_patch, Line};
 use formatter::Formatter;
 
@@ -110,7 +112,7 @@ fn parse_rustfmt_output<'a>(
 }
 
 /// like `fs::read`, but allows for reusing allocations
-fn read_into(file: &str, dst: &mut Vec<u8>) -> io::Result<()> {
+fn read_into(file: impl AsRef<Path>, dst: &mut Vec<u8>) -> io::Result<()> {
     File::open(file)?.read_to_end(dst).map(drop)
 }
 
@@ -149,13 +151,13 @@ fn print_diff_for_file(
 
 /// like `std::fs::write`, but will also create a `.bk` file
 fn write_with_backup(filename: &str, new_text: &[u8]) -> Result<()> {
-    let mut file = OpenOptions::new().read(true).write(true).open(filename)
+    let mut file = File::options().read(true).write(true).open(filename)
         .context("failed to open the file")?;
     let mut old_text = vec![];
     file.read_to_end(&mut old_text).context("failed to read the file")?;
     Ok(if &old_text[..] != new_text {
         let backup = Path::new(filename).with_extension("bk");
-        fs::write(&backup, old_text)
+        write(&backup, old_text)
             .with_context(||
                 format!("failed to create a backup file {:?}", backup.as_os_str()))?;
         file.rewind().context("failed to rewind the file handle")?;
@@ -186,20 +188,32 @@ struct Cli {
     /// Backup any modified files
     #[arg(long, next_line_help = true, requires = "files", conflicts_with = "check")]
     backup: bool,
-    /// Use colored output (if supported)
-    #[arg(long, next_line_help = true, default_value_t, value_name = "when")]
-    color: ColorWhen,
     /// Run in 'check' mode. Exits with 0 if input is formatted correctly. Exits with 1 and prints
     /// a diff if formatting is required.
     #[arg(long, next_line_help = true, requires = "files")]
     check: bool,
+    /// Use colored output (if supported)
+    #[arg(long, next_line_help = true, default_value_t, value_name = "when")]
+    color: ColorWhen,
+    /// Set options from command line. These settings take priority over .rustfmt.toml
+    #[arg(
+        long,
+        next_line_help = true,
+        default_value_t,
+        value_name = "key1=val1,key2=val2...",
+        hide_default_value = true,
+    )]
+    config: String,
+    /// Recursively searches the given path for the rustfmt.toml config file.
+    /// If not found reverts to the input file path
+    #[arg(long, next_line_help = true, value_name = "path")]
+    config_path: Option<PathBuf>,
     /// Rust edition to use
     #[arg(long, next_line_help = true, value_name = "edition")]
     edition: Option<usize>,
     /// What data to emit and how
     #[arg(long, next_line_help = true, default_value_t, value_name = "what")]
     emit: EmitTarget,
-    files: Vec<String>,
     /// Prints the names of mismatched files that were formatted.
     /// Prints the names of files that would be formatted when used with `--check` mode.
     #[arg(long, next_line_help = true, short = 'l')]
@@ -207,6 +221,8 @@ struct Cli {
     /// Show less output
     #[arg(long, short, next_line_help = true)]
     quiet: bool,
+
+    files: Vec<PathBuf>,
 }
 
 pub fn main() -> anyhow::Result<ExitCode> {
@@ -222,27 +238,45 @@ pub fn main() -> anyhow::Result<ExitCode> {
     let mut src_buf = vec![];
 
     let mut rustfmt = Command::new("rustfmt");
+    rustfmt.arg("--color").arg(args.color.to_string());
+    if !args.config.is_empty() {
+        rustfmt.arg("--config").arg(&args.config);
+    }
+    if let Some(config_path) = &args.config_path {
+        rustfmt.arg("--config-path").arg(config_path);
+    }
     if let Some(edition) = args.edition {
         rustfmt.arg("--edition").arg(edition.to_string());
     }
+    rustfmt.args(["--emit", "stdout"]);
     if args.quiet {
         rustfmt.arg("-q");
     }
     let rustfmt = rustfmt
-        .args(["--emit", "stdout"])
-        .arg("--color").arg(args.color.to_string())
         .args(&args.files)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped())
         .output().context("failed to run rustfmt")?;
+
+    from_utf8(&rustfmt.stderr).context("failed to parse rustfmt's stderr")?.lines()
+        .skip_while(|&l| l == "Warning: Unknown configuration option `yew`")
+        .for_each(|l| eprintln!("{l}"));
 
     if !rustfmt.status.success() {
         return Ok(ExitCode::FAILURE);
     }
 
-    let rustfmt_stdout = from_utf8(&rustfmt.stdout).context("failed to parse rustfmt's output")?;
-    let mut formatter = Formatter::default();
+    let config = Config::fetch(
+        args.config_path.as_deref(),
+        args.config.split(',').filter_map(|p| p.split_once('='))
+    ).context("failed to fetch the config")?;
+    for key in config.yew.unknown.keys() {
+        eprintln!("Warning: Unknown configuration option `yew.{key}`");
+    }
+    let mut formatter = Formatter::new(config);
+    let rustfmt_stdout = from_utf8(&rustfmt.stdout)
+        .context("failed to parse rustfmt's output")?;
 
     if args.files.is_empty() {
         let Some(out) = formatter.format("<stdin>", rustfmt_stdout)
@@ -251,6 +285,7 @@ pub fn main() -> anyhow::Result<ExitCode> {
             .context("failed to print a syntax error in the input")?
             else { return Ok(ExitCode::FAILURE) };
         print!("{out}");
+        return Ok(ExitCode::SUCCESS);
     }
 
     for (&file, &src) in parse_rustfmt_output(rustfmt_stdout, args.files.len()).iter() {
@@ -282,7 +317,7 @@ pub fn main() -> anyhow::Result<ExitCode> {
                     write_with_backup(file, out.as_bytes())
                         .with_context(|| format!("failed to write to {file:?} with backup"))?;
                 } else {
-                    fs::write(file, out)
+                    write(file, out)
                         .with_context(|| format!("failed to write to {file:?}"))?;
                 }
                 if args.files_with_diff {
