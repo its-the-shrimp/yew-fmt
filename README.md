@@ -17,7 +17,7 @@ On top of those, `yew-fmt` provides the following options of its own:
 
 ### `html_width`
 Maximum width of an HTML node before falling back to vertical formatting.
-- Default value: inherited from `max_width`
+- Default value: inherited from [`max_width`](https://rust-lang.github.io/rustfmt#max_width)
 - Possible values: any positive integer
 
 ## Use `yew-fmt` in your project
