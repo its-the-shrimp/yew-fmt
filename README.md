@@ -9,6 +9,17 @@ Installing it is as easy as
 cargo install yew-fmt
 ```
 
+## Configure `yew-fmt`
+In the fashion of being a drop-in replacement, it inherits methods of configuration
+from `rustfmt`, which is explained [here](https://rust-lang.github.io/rustfmt/),
+and all of configuration options for `rustfmt` are also supported by `yew-fmt`.
+On top of those, `yew-fmt` provides the following options of its own:
+
+### `html_width`
+Maximum width of an HTML node before falling back to vertical formatting.
+- Default value: inherited from `max_width`
+- Possible values: any positive integer
+
 ## Use `yew-fmt` in your project
 After installing it, it can be used from the command line just like `rustfmt`.
 To verify this, run the following command:
