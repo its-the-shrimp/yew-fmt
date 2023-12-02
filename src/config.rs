@@ -190,6 +190,7 @@ impl Config {
         return_parsed_if_file_exists!(&home);
 
         let mut global = config_dir().context("failed to get the user's config directory")?;
+        global.push("rustfmt");
         global.push("rustfmt.toml");
         return_parsed_if_file_exists!(&global);
         global.set_file_name(".rustfmt.toml");
