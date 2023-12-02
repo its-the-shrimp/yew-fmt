@@ -9,6 +9,22 @@ Installing it is as easy as
 cargo install yew-fmt
 ```
 
+## Use `yew-fmt` in your project
+After installing it, it can be used from the command line just like `rustfmt`.
+To verify this, run the following command:
+```console
+yew-fmt --version
+```
+
+However, because it's a drop-in replacement for `rustfmt`, it can replace the latter to be
+the backend for the `cargo fmt` command. To make it the default formatter on your machine,
+export an environment variable `RUSTFMT` and set it to `yew-fmt`, on Linux/MacOS it can be done
+with the following command:
+
+```console
+export RUSTFMT=yew-fmt
+```
+
 ## Configure `yew-fmt`
 In the fashion of being a drop-in replacement, it inherits methods of configuration
 from `rustfmt`, which is explained [here](https://rust-lang.github.io/rustfmt/),
@@ -52,22 +68,6 @@ would become
 ```
 - Default value: `true`
 - Possible values: `true`, `false`
-
-## Use `yew-fmt` in your project
-After installing it, it can be used from the command line just like `rustfmt`.
-To verify this, run the following command:
-```console
-yew-fmt --version
-```
-
-However, because it's a drop-in replacement for `rustfmt`, it can replace the latter to be
-the backend for the `cargo fmt` command. To make it the default formatter on your machine,
-export an environment variable `RUSTFMT` and set it to `yew-fmt`, on Linux/MacOS it can be done
-with the following command:
-
-```console
-export RUSTFMT=yew-fmt
-```
 
 ## Keep in mind, work is still in progress
 As the project is very early on in development, not all CLI options of `rustfmt` are supported, yet the eventual target of the project is 100% compatibility, so all the ❌ in the table 
