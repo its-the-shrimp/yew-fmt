@@ -1,4 +1,5 @@
 use std::fmt::Write;
+use std::mem::replace;
 use anyhow::{Context, Result, bail};
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use codespan_reporting::term::termcolor::WriteColor;
@@ -9,11 +10,7 @@ use syn::punctuated::Punctuated;
 use syn::{spanned::Spanned, Macro, visit::Visit};
 use crate::config::Config;
 use crate::html::*;
-
-/// Returns the length of the last line of the string, or None if the string has only 1 line
-fn last_line_len(text: &str) -> Option<usize> {
-    text.bytes().rev().enumerate().find_map(|(i, c)| (c == b'\n').then_some(i)) 
-}
+use crate::utils::StrExt;
 
 fn print_break(out: &mut String, indent: usize) {
     out.reserve(indent + 1);
@@ -23,14 +20,21 @@ fn print_break(out: &mut String, indent: usize) {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum Comment<'src> {
+    // the initial `//` and the newline are not included
+    Line(&'src str),
+    Multi(&'src str)
+}
+
 struct CommentParser<'src>(&'src str);
 
 impl<'src> Iterator for CommentParser<'src> {
-    type Item = &'src str;
+    type Item = Comment<'src>;
 
     fn next(&mut self) -> Option<Self::Item> {
         /// the `usize`s are offsets into `src`
-        #[derive(Clone, Copy)]
+        #[derive(Debug, Clone, Copy)]
         enum ParserState {
             None,
             Start(usize),
@@ -43,46 +47,40 @@ impl<'src> Iterator for CommentParser<'src> {
         let mut state = ParserState::None;
         for (i, c) in src.char_indices() {
             match c {
-                '/' => state = match state {
-                    ParserState::None => ParserState::Start(i),
-                    ParserState::Start(i) => ParserState::Line(i),
-                    ParserState::Line(_) => continue,
-                    ParserState::Multi(_) => continue,
-                    ParserState::MultiEnd(start) => {
-                        // TODO: use `str::ceil_char_boundary` here when it gets stabilised
-                        let (extracted, rest) = src.split_at(start + 1);
+                '/' => match state {
+                    ParserState::None => state = ParserState::Start(i),
+                    ParserState::Start(_) => state = ParserState::Line(i + 1),
+                    ParserState::MultiEnd(start) => unsafe {
+                        // Safety: `src[i]` is guaranteed to be '/'
+                        let (extracted, rest) = src.split_at_unchecked(i + 1);
                         *src = rest;
-                        return Some(unsafe { extracted.get_unchecked(start ..) })
+                        return Some(Comment::Multi(extracted.get_unchecked(start..)))
                     }
+                    _ => (),
                 },
 
-                '*' => state = match state {
-                    ParserState::None => continue,
-                    ParserState::Start(i) => ParserState::Multi(i),
-                    ParserState::Line(_) => continue,
-                    ParserState::Multi(i) => ParserState::MultiEnd(i),
-                    ParserState::MultiEnd(_) => continue,
+                '*' => match state {
+                    ParserState::Start(i) => state = ParserState::Multi(i),
+                    ParserState::Multi(i) => state = ParserState::MultiEnd(i),
+                    _ => (),
                 },
 
-                '\n' => state = match state {
-                    ParserState::None => continue,
-                    ParserState::Start(_) => ParserState::None,
-                    ParserState::Line(start) => {
-                        // TODO: use `str::ceil_char_boundary` here when it gets stabilised
-                        let (extracted, rest) = src.split_at(start + 1);
+                '\n' => match state {
+                    ParserState::Start(_) => state = ParserState::None,
+                    ParserState::Line(start) => unsafe {
+                        let (extracted, rest) = src.split_at_unchecked(i);
                         *src = rest;
-                        return Some(unsafe { extracted.get_unchecked(start ..) })
+                        let res = Some(Comment::Line(extracted.get_unchecked(start..)));
+                        return res
                     }
-                    ParserState::Multi(_) => continue,
-                    ParserState::MultiEnd(i) => ParserState::Multi(i),
+                    ParserState::MultiEnd(i) => state = ParserState::Multi(i),
+                    _ => (),
                 },
 
-                _ => state = match state {
-                    ParserState::None => continue,
-                    ParserState::Start(_) => ParserState::None,
-                    ParserState::Line(_) => continue,
-                    ParserState::Multi(_) => continue,
-                    ParserState::MultiEnd(i) => ParserState::Multi(i),
+                _ => match state {
+                    ParserState::Start(_) => state = ParserState::None,
+                    ParserState::MultiEnd(i) => state = ParserState::Multi(i),
+                    _ => (),
                 }
             }
         }
@@ -188,37 +186,46 @@ impl<'src> FmtBlock<'src> {
         self.width += text.len();
     }
 
+    fn add_raw_space(&mut self) {
+        self.tokens.push(FmtToken::Text(" "));
+        self.width += 1;
+    }
+
     fn add_line_comment(&mut self, comment: &'src str) {
         self.tokens.push(FmtToken::LineComment(comment));
         self.width += comment.len() + 4;
     }
 
-    fn add_comment(&mut self, src: &'src str, until: usize) -> Result<bool> {
+    fn add_comment(
+        &mut self,
+        src: &'src str,
+        until: usize,
+        mut sep: impl FnMut(&mut Self),
+    ) -> Result<()> {
         let range = self.cur_offset .. until;
         let comment = src.get(range.clone())
-            .with_context(|| format!("span {range:?} is out of bounds for the source"))?
-            .trim_start()
-            .trim_end_matches(' ');
+            .with_context(|| format!("span {range:?} is out of bounds for the source"))?;
         self.cur_offset = until;
-        if comment.is_empty() { return Ok(false) }
 
-        let needs_sep = self.spacing.before && self.tokens.is_empty();
-        if let Some(comment) = comment.strip_prefix("//") {
-            self.add_line_comment(comment.trim_end_matches('\n'));
-        } else {
-            self.add_raw_text(comment)
+        let mut comment_added = false;
+        for comment in CommentParser(comment) {
+            match comment {
+                Comment::Line(line) => self.add_line_comment(line),
+                Comment::Multi(inner) => self.add_raw_text(inner),
+            }
+            if replace(&mut comment_added, true) {
+                sep(self);
+            }
         }
-        if needs_sep {
-            self.add_raw_sep();
-        }
-        Ok(true)
+
+        Ok(if comment_added && self.spacing.before {
+            sep(self);
+        })
     }
 
     pub fn add_space(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result<()> {
-        self.add_raw_text(" ");
-        Ok(if self.add_comment(ctx.input, ctx.pos_to_byte_offset(at)?)? {
-            self.add_raw_text(" ");
-        })
+        self.add_raw_space();
+        self.add_comment(ctx.input, ctx.pos_to_byte_offset(at)?, Self::add_raw_space)
     }
 
     fn add_text(
@@ -227,7 +234,7 @@ impl<'src> FmtBlock<'src> {
         ctx: &FormatCtx<'_, 'src>,
         at: LineColumn
     ) -> Result<()> {
-        self.add_comment(ctx.input, ctx.pos_to_byte_offset(at)?)?;
+        self.add_comment(ctx.input, ctx.pos_to_byte_offset(at)?, Self::add_raw_space)?;
         self.add_raw_text(text);
         Ok(self.cur_offset += text.len())
     }
@@ -239,9 +246,7 @@ impl<'src> FmtBlock<'src> {
 
     pub fn add_sep(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result<()> {
         self.add_raw_sep();
-        Ok(if self.add_comment(ctx.input, ctx.pos_to_byte_offset(at)?)? {
-            self.add_raw_sep();
-        })
+        self.add_comment(ctx.input, ctx.pos_to_byte_offset(at)?, Self::add_raw_sep)
     }
 
     /// adds a block and gives a mutable reference to it to `f`
@@ -296,7 +301,7 @@ impl<'src> FmtBlock<'src> {
             let mut offset = 0;
             for token in &mut self.tokens {
                 match token {
-                    FmtToken::Text(text) => if let Some(len) = last_line_len(text) {
+                    FmtToken::Text(text) => if let Some(len) = text.last_line_len() {
                         offset = len;
                     } else {
                         offset += text.len();
@@ -366,7 +371,7 @@ impl<'src> FmtBlock<'src> {
 }
 
 pub struct FormatCtx<'fmt, 'src> {
-    config: &'fmt Config,
+    pub config: &'fmt Config,
     /// for error reporting purposes
     filename: &'src str,
     /// maps line number to byte offset in `input`
@@ -469,7 +474,7 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
                 format!("source position {line}:{column} can't be converted to a byte offset"))
     }
 
-    fn source_code(&self, loc: Location) -> Result<&'src str> {
+    pub fn source_code(&self, loc: Location) -> Result<&'src str> {
         let start = self.pos_to_byte_offset(loc.start)
             .context("failed to find the start of the span")?;
         let end = self.pos_to_byte_offset(loc.end)

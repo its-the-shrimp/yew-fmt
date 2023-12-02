@@ -15,10 +15,21 @@ from `rustfmt`, which is explained [here](https://rust-lang.github.io/rustfmt/),
 and all of configuration options for `rustfmt` are also supported by `yew-fmt`.
 On top of those, `yew-fmt` provides the following options of its own:
 
-### `html_width`
+### `yew.html_width`
 Maximum width of an HTML node before falling back to vertical formatting.
 - Default value: inherited from [`max_width`](https://rust-lang.github.io/rustfmt#max_width)
 - Possible values: any positive integer
+
+### `yew.use_prop_init_shorthand`
+Use prop initialiser shorthand if possible.
+- Default value: inherited from
+    [`use_field_init_shorthand`](https://rust-lang.github.io/rustfmt#use_field_init_shorthand)
+- Possible values: `true`, `false`
+
+### `yew.unwrap_literal_prop_values`
+Remove braces around prop initialisers if they consist of only a literal.
+- Default value: `true`
+- Possible values: `true`, `false`
 
 ## Use `yew-fmt` in your project
 After installing it, it can be used from the command line just like `rustfmt`.

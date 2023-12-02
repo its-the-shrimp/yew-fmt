@@ -3,82 +3,24 @@
 mod formatter;
 mod html;
 mod config;
+mod utils;
 
 use std::{
     process::{ExitCode, Command, Stdio},
     collections::HashMap,
     str::from_utf8,
-    fmt::{Display, self, Arguments},
-    fs::{File, write},
-    io::{Write, self, IoSlice, Read, Seek},
-    path::{Path, PathBuf}
+    fs::write,
+    io::Write,
+    path::PathBuf
 };
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum, ColorChoice as ColorWhen};
 use codespan_reporting::term::termcolor::{ColorSpec, Color, ColorChoice, WriteColor,
-    BufferedStandardStream, HyperlinkSpec};
+    BufferedStandardStream};
 use config::Config;
 use diffy::{create_patch, Line};
 use formatter::Formatter;
-
-/// stores a flag that signals whether anything was written to the stream
-struct Flagged<W> {
-    inner: W,
-    written: bool
-}
-
-impl<W: Write> Write for Flagged<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.written = true;
-        self.inner.write(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> { self.inner.flush() }
-
-    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
-        self.written = true;
-        self.inner.write_vectored(bufs)
-    }
-
-    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
-        self.written = true;
-        self.inner.write_all(buf)
-    }
-
-    fn write_fmt(&mut self, fmt: Arguments<'_>) -> io::Result<()> {
-        self.written = true;
-        self.inner.write_fmt(fmt)
-    }
-
-    fn by_ref(&mut self) -> &mut Self { self }
-}
-
-impl<W: WriteColor> WriteColor for Flagged<W> {
-    fn supports_color(&self) -> bool { self.inner.supports_color() }
-
-    fn set_color(&mut self, spec: &ColorSpec) -> io::Result<()> {
-        self.written = true;
-        self.inner.set_color(spec)
-    }
-
-    fn reset(&mut self) -> io::Result<()> {
-        self.written = true;
-        self.inner.reset()
-    }
-
-    fn is_synchronous(&self) -> bool { self.inner.is_synchronous() }
-
-    fn set_hyperlink(&mut self, link: &HyperlinkSpec) -> io::Result<()> {
-        self.written = true;
-        self.inner.set_hyperlink(link)
-    }
-
-    fn supports_hyperlinks(&self) -> bool { self.inner.supports_hyperlinks() }
-}
-
-impl<W> Flagged<W> {
-    fn new(inner: W) -> Self { Self { inner, written: false } }
-}
+use utils::{KVPairs, write_with_backup, Flagged, read_into};
 
 fn parse_rustfmt_output<'a>(
     input: &'a str,
@@ -109,11 +51,6 @@ fn parse_rustfmt_output<'a>(
         }
     }
     res
-}
-
-/// like `fs::read`, but allows for reusing allocations
-fn read_into(file: impl AsRef<Path>, dst: &mut Vec<u8>) -> io::Result<()> {
-    File::open(file)?.read_to_end(dst).map(drop)
 }
 
 // `buf` must be passed into the function empty and is guaranteed to be empty after it
@@ -149,37 +86,10 @@ fn print_diff_for_file(
     })
 }
 
-/// like `std::fs::write`, but will also create a `.bk` file
-fn write_with_backup(filename: &str, new_text: &[u8]) -> Result<()> {
-    let mut file = File::options().read(true).write(true).open(filename)
-        .context("failed to open the file")?;
-    let mut old_text = vec![];
-    file.read_to_end(&mut old_text).context("failed to read the file")?;
-    Ok(if &old_text[..] != new_text {
-        let backup = Path::new(filename).with_extension("bk");
-        write(&backup, old_text)
-            .with_context(||
-                format!("failed to create a backup file {:?}", backup.as_os_str()))?;
-        file.rewind().context("failed to rewind the file handle")?;
-        file.set_len(0).context("failed to clear the file")?;
-        file.write_all(new_text).context("failed to write new data to the file")?;
-    })
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum EmitTarget {
-    #[default]
     Files,
     Stdout,
-}
-
-impl Display for EmitTarget {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Stdout => "stdout",
-            Self::Files => "files",
-        })
-    }
 }
 
 #[derive(Parser)]
@@ -199,11 +109,11 @@ struct Cli {
     #[arg(
         long,
         next_line_help = true,
-        default_value_t,
+        default_value = "",
         value_name = "key1=val1,key2=val2...",
         hide_default_value = true,
     )]
-    config: String,
+    config: KVPairs,
     /// Recursively searches the given path for the rustfmt.toml config file.
     /// If not found reverts to the input file path
     #[arg(long, next_line_help = true, value_name = "path")]
@@ -212,7 +122,7 @@ struct Cli {
     #[arg(long, next_line_help = true, value_name = "edition")]
     edition: Option<usize>,
     /// What data to emit and how
-    #[arg(long, next_line_help = true, default_value_t, value_name = "what")]
+    #[arg(long, next_line_help = true, default_value = "files", value_name = "what")]
     emit: EmitTarget,
     /// Prints the names of mismatched files that were formatted.
     /// Prints the names of files that would be formatted when used with `--check` mode.
@@ -240,7 +150,15 @@ pub fn main() -> anyhow::Result<ExitCode> {
     let mut rustfmt = Command::new("rustfmt");
     rustfmt.arg("--color").arg(args.color.to_string());
     if !args.config.is_empty() {
-        rustfmt.arg("--config").arg(&args.config);
+        let no_yew_fields: String = args.config.iter()
+            .filter(|(k, _)| !k.starts_with("yew."))
+            .flat_map(|(k, v)| [",", k, "=", v])
+            // TODO: replace with `intersperse` once stabilised
+            .skip(1)
+            .collect();
+        if !no_yew_fields.is_empty() {
+            rustfmt.arg("--config").arg(no_yew_fields);
+        }
     }
     if let Some(config_path) = &args.config_path {
         rustfmt.arg("--config-path").arg(config_path);
@@ -267,10 +185,8 @@ pub fn main() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     }
 
-    let config = Config::fetch(
-        args.config_path.as_deref(),
-        args.config.split(',').filter_map(|p| p.split_once('='))
-    ).context("failed to fetch the config")?;
+    let config = Config::fetch(args.config_path.as_deref(), &*args.config)
+        .context("failed to fetch the config")?;
     for key in config.yew.unknown.keys() {
         eprintln!("Warning: Unknown configuration option `yew.{key}`");
     }

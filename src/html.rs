@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use proc_macro2::{Delimiter, TokenTree, TokenStream, LineColumn};
 use quote::ToTokens;
 use syn::{
@@ -22,6 +24,11 @@ impl ToTokens for AnyIdent {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         self.0.to_tokens(tokens)
     }
+}
+
+impl Deref for AnyIdent {
+    type Target = Ident;
+    fn deref(&self) -> &Self::Target { &self.0 }
 }
 
 pub enum Html {
@@ -546,9 +553,17 @@ impl<'src> Format<'src> for HtmlProp {
                 block.add_source(ctx, lit.loc())
             }
             HtmlPropKind::Expr(name, eq, expr) => {
+                if ctx.config.yew.use_prop_init_shorthand
+                    && name.len() == 1
+                    && matches!(&expr.expr, Expr::Path(p)
+                        if p.path.is_ident(unsafe { &**name.first().unwrap_unchecked() }))
+                {
+                    return expr.format(block, ctx)
+                }
+
                 block.add_source_punctuated(ctx, name)?;
                 block.add_source(ctx, eq.loc())?;
-                if matches!(expr.expr, Expr::Lit(_)) {
+                if ctx.config.yew.unwrap_literal_prop_values && matches!(expr.expr, Expr::Lit(_)) {
                     block.add_source(ctx, expr.expr.loc())
                 } else {
                     expr.format(block, ctx)
@@ -583,7 +598,9 @@ impl<'src> Format<'src> for HtmlBlockContent {
             Self::Expr(e) => block.add_source(ctx, e.loc()),
             Self::Iterable(r#for, e) => {
                 block.add_source(ctx, r#for.loc())?;
-                block.add_source(ctx, e.loc())
+                let expr_loc = e.loc();
+                block.add_space(ctx, expr_loc.start())?;
+                block.add_source(ctx, expr_loc)
             }
         }
     }
