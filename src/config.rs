@@ -22,6 +22,7 @@ pub struct YewConfig {
     pub html_width: usize,
     pub unwrap_literal_prop_values: bool,
     pub use_prop_init_shorthand: bool,
+    pub self_close_elements: bool,
     pub unknown: Map<String, Value>,
 }
 
@@ -31,6 +32,7 @@ impl Default for YewConfig {
             html_width: 100,
             unwrap_literal_prop_values: true,
             use_prop_init_shorthand: false,
+            self_close_elements: true,
             unknown: Map::new(),
         }
     }
@@ -50,6 +52,7 @@ struct RawConfigYew {
     html_width: Option<usize>,
     unwrap_literal_prop_values: Option<bool>,
     use_prop_init_shorthand: Option<bool>,
+    self_close_elements: Option<bool>,
     #[serde(flatten)]
     unknown: Map<String, Value>,
 }
@@ -118,12 +121,14 @@ impl Config {
                 use_field_init_shorthand: bool,
                 yew.html_width: usize,
                 yew.unwrap_literal_prop_values: bool,
-                yew.use_prop_init_shorthand: bool
+                yew.use_prop_init_shorthand: bool,
+                yew.self_close_elements: bool
             });
         }
 
         Ok(Self {
-            tab_spaces: raw.tab_spaces.unwrap_or(4),
+            tab_spaces: raw.tab_spaces
+                .unwrap_or(4),
             yew: YewConfig {
                 html_width: raw.yew.html_width
                     .or(raw.max_width)
@@ -133,6 +138,8 @@ impl Config {
                 use_prop_init_shorthand: raw.yew.use_prop_init_shorthand
                     .or(raw.use_field_init_shorthand)
                     .unwrap_or(false),
+                self_close_elements: raw.yew.self_close_elements
+                    .unwrap_or(true),
                 unknown: raw.yew.unknown
             }
         })

@@ -483,7 +483,8 @@ impl<'src> Format<'src> for HtmlDynamicElement {
             }
         }))?;
 
-        let closing_tag = self.closing_tag.as_ref().filter(|_| !self.children.is_empty());
+        let closing_tag = self.closing_tag.as_ref()
+            .filter(|_| !ctx.config.yew.self_close_elements || !self.children.is_empty());
         if let Some((gt, closing_lt, closing_at)) = closing_tag {
             block.add_source(ctx, gt.loc())?;
             block.add_block(ELEMENT_CHILDREN_SPACING, |block| anyhow::Ok({
@@ -516,7 +517,8 @@ impl<'src> Format<'src> for HtmlLiteralElement {
             }
         }))?;
 
-        let closing_tag = self.closing_tag.as_ref().filter(|_| !self.children.is_empty());
+        let closing_tag = self.closing_tag.as_ref()
+            .filter(|_| !ctx.config.yew.self_close_elements || !self.children.is_empty());
         if let Some((gt, closing_lt, closing_name)) = closing_tag {
             block.add_source(ctx, gt.loc())?;
             block.add_block(ELEMENT_CHILDREN_SPACING, |block| anyhow::Ok({

@@ -28,6 +28,28 @@ Use prop initialiser shorthand if possible.
 
 ### `yew.unwrap_literal_prop_values`
 Remove braces around prop initialisers if they consist of only a literal.
+Example:
+```html
+<div id={"foo"} />
+```
+would become
+```html
+<div id="foo" />
+```
+
+- Default value: `true`
+- Possible values: `true`, `false`
+
+### `yew.self_close_elements`
+Make elements self-closed if they have no children.
+Example:
+```html
+<div id="foo"></div>
+```
+would become
+```html
+<div id="foo" />
+```
 - Default value: `true`
 - Possible values: `true`, `false`
 
