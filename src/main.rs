@@ -212,9 +212,9 @@ pub fn main() -> anyhow::Result<ExitCode> {
             else { return Ok(ExitCode::FAILURE) };
 
         if args.check {
+            read_into(file, &mut src_buf)
+                .with_context(|| format!("failed to read the contents of {file:?}"))?;
             if args.files_with_diff {
-                read_into(file, &mut src_buf)
-                    .with_context(|| format!("failed to read the contents of {file:?}"))?;
                 if src_buf != out.as_bytes() {
                     println!("{file}");
                 }

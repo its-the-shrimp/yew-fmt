@@ -420,7 +420,7 @@ impl Visit<'_> for FormatCtx<'_, '_> {
             };
             let html_start = opening_span.end();
             let mut block = FmtBlock::new(
-                Spacing::default(),
+                BLOCK_CHILDREN_SPACING,
                 self.pos_to_byte_offset(html_start)?
             );
             html.format(&mut block, self)?;
@@ -557,8 +557,9 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     }
 
     fn finalise(self) -> Result<FormatResult<'fmt, 'src>> {
-        let rest = unsafe { self.input.get_unchecked(self.cur_offset ..) };
         self.offsets.clear();
+        self.temp_str_buf.clear();
+        let rest = unsafe { self.input.get_unchecked(self.cur_offset ..) };
         self.output.push_str(rest);
         if !self.output.ends_with('\n') {
             self.output.push('\n');

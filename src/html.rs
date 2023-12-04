@@ -411,10 +411,19 @@ impl HtmlElse {
     }
 }
 
-const ELEMENT_CHILDREN_SPACING: Spacing = Spacing { before: false, between: false, after: false };
-const   BLOCK_CHILDREN_SPACING: Spacing = Spacing { before: true,  between: false, after: true  };
+pub const ELEMENT_CHILDREN_SPACING: Spacing = Spacing {
+    before: false,
+    between: false,
+    after: false
+};
 
-const fn props_spacing(self_closing: bool) -> Spacing {
+pub const BLOCK_CHILDREN_SPACING: Spacing = Spacing {
+    before: true,
+    between: false,
+    after: true
+};
+
+pub const fn props_spacing(self_closing: bool) -> Spacing {
     Spacing { before: true, between: true, after: self_closing }
 }
 

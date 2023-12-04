@@ -129,5 +129,6 @@ pub fn write_with_backup(filename: &str, new_text: &[u8]) -> Result<()> {
 
 /// like `fs::read`, but allows for reusing allocations
 pub fn read_into(file: impl AsRef<Path>, dst: &mut Vec<u8>) -> io::Result<()> {
+    dst.clear();
     File::open(file)?.read_to_end(dst).map(drop)
 }
