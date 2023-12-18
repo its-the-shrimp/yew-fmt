@@ -1,9 +1,9 @@
-use std::{fs::read_to_string, path::Path, io, env::current_dir, num::ParseIntError};
-use dirs::{home_dir, config_dir};
-use serde::Deserialize;
-use anyhow::{Result, Context, anyhow, bail};
-use toml::{map::Map, Value};
 use crate::utils::StrExt;
+use anyhow::{anyhow, bail, Context, Result};
+use dirs::{config_dir, home_dir};
+use serde::Deserialize;
+use std::{env::current_dir, fs::read_to_string, io, num::ParseIntError, path::Path};
+use toml::{map::Map, Value};
 
 #[derive(Clone)]
 pub struct Config {
@@ -13,7 +13,10 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { tab_spaces: 4, yew: YewConfig::default() }
+        Self {
+            tab_spaces: 4,
+            yew: YewConfig::default(),
+        }
     }
 }
 
@@ -44,7 +47,7 @@ struct RawConfig {
     max_width: Option<usize>,
     use_field_init_shorthand: Option<bool>,
     #[serde(default)]
-    yew: RawConfigYew
+    yew: RawConfigYew,
 }
 
 #[derive(Deserialize, Default)]
@@ -62,7 +65,7 @@ fn parse_usize(src: &str) -> Result<usize, ParseIntError> {
         Some(("0x", rest)) => (0x10, rest),
         Some(("0b", rest)) => (0b10, rest),
         Some(("0o", rest)) => (0o10, rest),
-        _  => (10, src),
+        _ => (10, src),
     };
     usize::from_str_radix(src, base)
 }
@@ -71,7 +74,7 @@ fn parse_bool(src: &str) -> Result<bool> {
     match src {
         "true" => Ok(true),
         "false" => Ok(false),
-        _ => bail!("expected `true` or `false`, instead got `{src}`")
+        _ => bail!("expected `true` or `false`, instead got `{src}`"),
     }
 }
 
@@ -127,35 +130,34 @@ impl Config {
         }
 
         Ok(Self {
-            tab_spaces: raw.tab_spaces
-                .unwrap_or(4),
+            tab_spaces: raw.tab_spaces.unwrap_or(4),
             yew: YewConfig {
-                html_width: raw.yew.html_width
-                    .or(raw.max_width)
-                    .unwrap_or(100),
-                unwrap_literal_prop_values: raw.yew.unwrap_literal_prop_values
-                    .unwrap_or(true),
-                use_prop_init_shorthand: raw.yew.use_prop_init_shorthand
+                html_width: raw.yew.html_width.or(raw.max_width).unwrap_or(100),
+                unwrap_literal_prop_values: raw.yew.unwrap_literal_prop_values.unwrap_or(true),
+                use_prop_init_shorthand: raw
+                    .yew
+                    .use_prop_init_shorthand
                     .or(raw.use_field_init_shorthand)
                     .unwrap_or(false),
-                self_close_elements: raw.yew.self_close_elements
-                    .unwrap_or(true),
-                unknown: raw.yew.unknown
-            }
+                self_close_elements: raw.yew.self_close_elements.unwrap_or(true),
+                unknown: raw.yew.unknown,
+            },
         })
     }
 
     pub fn fetch<'a>(
         path: Option<&Path>,
-        additional: impl IntoIterator<Item = &'a (impl AsRef<str> + 'a, impl AsRef<str> + 'a)>
+        additional: impl IntoIterator<Item = &'a (impl AsRef<str> + 'a, impl AsRef<str> + 'a)>,
     ) -> Result<Self> {
         macro_rules! return_parsed_if_file_exists {
             ($path:expr) => {{
                 let path: &Path = $path;
                 match read_to_string(path) {
                     Ok(src) => return Self::parse(&src, additional),
-                    Err(err) => if err.kind() != io::ErrorKind::NotFound {
-                        return Err(anyhow!(err).context(format!("failed to read {path:?}")))
+                    Err(err) => {
+                        if err.kind() != io::ErrorKind::NotFound {
+                            return Err(anyhow!(err).context(format!("failed to read {path:?}")));
+                        }
                     }
                 }
             }};
@@ -169,7 +171,9 @@ impl Config {
                 path.set_file_name(".rustfmt.toml");
                 return_parsed_if_file_exists!(&path);
                 path.pop();
-                if !path.pop() { break }
+                if !path.pop() {
+                    break;
+                }
             }
         }
 
@@ -180,7 +184,9 @@ impl Config {
             aqui.set_file_name(".rustfmt.toml");
             return_parsed_if_file_exists!(&aqui);
             aqui.pop();
-            if !aqui.pop() { break }
+            if !aqui.pop() {
+                break;
+            }
         }
 
         let mut home = home_dir().context("failed to get the user's home directory")?;

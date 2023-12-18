@@ -1,21 +1,31 @@
-use std::fmt::Write;
-use std::mem::replace;
-use anyhow::{Context, Result, bail};
-use codespan_reporting::diagnostic::{Diagnostic, Label};
-use codespan_reporting::term::termcolor::WriteColor;
-use codespan_reporting::term;
-use codespan_reporting::files::SimpleFile;
-use proc_macro2::LineColumn;
-use syn::punctuated::Punctuated;
-use syn::{spanned::Spanned, Macro, visit::Visit};
 use crate::config::Config;
 use crate::html::*;
 use crate::utils::StrExt;
+use anyhow::{bail, Context, Result};
+use codespan_reporting::diagnostic::{Diagnostic, Label};
+use codespan_reporting::files::SimpleFile;
+use codespan_reporting::term;
+use codespan_reporting::term::termcolor::WriteColor;
+use proc_macro2::LineColumn;
+use std::mem::replace;
+use syn::punctuated::Punctuated;
+use syn::{spanned::Spanned, visit::Visit, Macro};
+use syn::{Attribute, Item, Stmt};
+
+fn skipped(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path()
+            .segments
+            .iter()
+            .zip(["rustfmt", "skip"])
+            .all(|(x, y)| x.ident == y)
+    })
+}
 
 fn print_break(out: &mut String, indent: usize) {
     out.reserve(indent + 1);
     out.push('\n');
-    for _ in 0 .. indent {
+    for _ in 0..indent {
         out.push(' ');
     }
 }
@@ -24,7 +34,7 @@ fn print_break(out: &mut String, indent: usize) {
 enum Comment<'src> {
     // the initial `//` and the newline are not included
     Line(&'src str),
-    Multi(&'src str)
+    Multi(&'src str),
 }
 
 struct CommentParser<'src>(&'src str);
@@ -40,7 +50,7 @@ impl<'src> Iterator for CommentParser<'src> {
             Start(usize),
             Line(usize),
             Multi(usize),
-            MultiEnd(usize)
+            MultiEnd(usize),
         }
 
         let Self(src) = self;
@@ -54,8 +64,8 @@ impl<'src> Iterator for CommentParser<'src> {
                         // Safety: `src[i]` is guaranteed to be '/'
                         let (extracted, rest) = src.split_at_unchecked(i + 1);
                         *src = rest;
-                        return Some(Comment::Multi(extracted.get_unchecked(start..)))
-                    }
+                        return Some(Comment::Multi(extracted.get_unchecked(start..)));
+                    },
                     _ => (),
                 },
 
@@ -71,8 +81,8 @@ impl<'src> Iterator for CommentParser<'src> {
                         let (extracted, rest) = src.split_at_unchecked(i);
                         *src = rest;
                         let res = Some(Comment::Line(extracted.get_unchecked(start..)));
-                        return res
-                    }
+                        return res;
+                    },
                     ParserState::MultiEnd(i) => state = ParserState::Multi(i),
                     _ => (),
                 },
@@ -81,7 +91,7 @@ impl<'src> Iterator for CommentParser<'src> {
                     ParserState::Start(_) => state = ParserState::None,
                     ParserState::MultiEnd(i) => state = ParserState::Multi(i),
                     _ => (),
-                }
+                },
             }
         }
 
@@ -101,23 +111,39 @@ pub trait Located {
     fn start(&self) -> LineColumn;
     fn end(&self) -> LineColumn;
     fn loc(&self) -> Location {
-        Location { start: self.start(), end: self.end() }
+        Location {
+            start: self.start(),
+            end: self.end(),
+        }
     }
 }
 
 impl<T: Spanned> Located for T {
-    fn start(&self) -> LineColumn { self.span().start() }
-    fn end(&self) -> LineColumn { self.span().end() }
+    fn start(&self) -> LineColumn {
+        self.span().start()
+    }
+    fn end(&self) -> LineColumn {
+        self.span().end()
+    }
     fn loc(&self) -> Location {
         let span = self.span();
-        Location { start: span.start(), end: span.end() }
+        Location {
+            start: span.start(),
+            end: span.end(),
+        }
     }
 }
 
 impl Located for Location {
-    fn start(&self) -> LineColumn { self.start }
-    fn end(&self) -> LineColumn { self.end }
-    fn loc(&self) -> Location { *self }
+    fn start(&self) -> LineColumn {
+        self.start
+    }
+    fn end(&self) -> LineColumn {
+        self.end
+    }
+    fn loc(&self) -> Location {
+        *self
+    }
 }
 
 pub trait Format<'src> {
@@ -143,7 +169,7 @@ enum FmtToken<'src> {
     /// needs special handling of the newline
     LineComment(&'src str),
     Sep,
-    Block(FmtBlock<'src>)
+    Block(FmtBlock<'src>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -202,8 +228,9 @@ impl<'src> FmtBlock<'src> {
         until: usize,
         mut sep: impl FnMut(&mut Self),
     ) -> Result<()> {
-        let range = self.cur_offset .. until;
-        let comment = src.get(range.clone())
+        let range = self.cur_offset..until;
+        let comment = src
+            .get(range.clone())
             .with_context(|| format!("span {range:?} is out of bounds for the source"))?;
         self.cur_offset = until;
 
@@ -232,7 +259,7 @@ impl<'src> FmtBlock<'src> {
         &mut self,
         text: &'src str,
         ctx: &FormatCtx<'_, 'src>,
-        at: LineColumn
+        at: LineColumn,
     ) -> Result<()> {
         self.add_comment(ctx.input, ctx.pos_to_byte_offset(at)?, Self::add_raw_space)?;
         self.add_raw_text(text);
@@ -263,7 +290,8 @@ impl<'src> FmtBlock<'src> {
     }
 
     pub fn add_source(&mut self, ctx: &FormatCtx<'_, 'src>, loc: Location) -> Result<()> {
-        let text = ctx.source_code(loc)
+        let text = ctx
+            .source_code(loc)
             .context("failed to get a token's source code")?;
         self.add_text(text, ctx, loc.start)
     }
@@ -281,7 +309,7 @@ impl<'src> FmtBlock<'src> {
     pub fn add_source_punctuated(
         &mut self,
         ctx: &FormatCtx<'_, 'src>,
-        iter: &Punctuated<impl Located, impl Located>
+        iter: &Punctuated<impl Located, impl Located>,
     ) -> Result<()> {
         Ok(for pair in iter.pairs() {
             self.add_source(ctx, pair.value().loc())?;
@@ -292,7 +320,9 @@ impl<'src> FmtBlock<'src> {
     }
 
     fn determine_breaking(&mut self, ctx: &FormatCtx<'_, 'src>, offset: usize, indent: usize) {
-        let max_width = offset + indent + self.width
+        let max_width = offset
+            + indent
+            + self.width
             + (self.spacing.around() && !self.tokens.is_empty()) as usize;
         if max_width > ctx.config.yew.html_width {
             self.broken = true;
@@ -301,10 +331,12 @@ impl<'src> FmtBlock<'src> {
             let mut offset = 0;
             for token in &mut self.tokens {
                 match token {
-                    FmtToken::Text(text) => if let Some(len) = text.last_line_len() {
-                        offset = len;
-                    } else {
-                        offset += text.len();
+                    FmtToken::Text(text) => {
+                        if let Some(len) = text.last_line_len() {
+                            offset = len;
+                        } else {
+                            offset += text.len();
+                        }
                     }
                     FmtToken::LineComment(comment) => offset += comment.len() + 4,
                     FmtToken::Sep => offset = 0,
@@ -323,25 +355,29 @@ impl<'src> FmtBlock<'src> {
             indent: Option<usize>,
             spaced: bool,
             cfg: &Config,
-            out: &mut String
+            out: &mut String,
         ) {
             match token {
                 FmtToken::Text(text) => out.push_str(text),
-                FmtToken::LineComment(comment) => if let Some(indent) = indent {
-                    out.push_str("//");
-                    out.push_str(comment);
-                    print_break(out, indent)
-                } else {
-                    out.push_str("/*");
-                    out.push_str(comment);
-                    out.push_str("*/")
+                FmtToken::LineComment(comment) => {
+                    if let Some(indent) = indent {
+                        out.push_str("//");
+                        out.push_str(comment);
+                        print_break(out, indent)
+                    } else {
+                        out.push_str("/*");
+                        out.push_str(comment);
+                        out.push_str("*/")
+                    }
                 }
-                FmtToken::Sep => if let Some(indent) = indent {
-                    print_break(out, indent)
-                } else if spaced {
-                    out.push(' ')
+                FmtToken::Sep => {
+                    if let Some(indent) = indent {
+                        print_break(out, indent)
+                    } else if spaced {
+                        out.push(' ')
+                    }
                 }
-                FmtToken::Block(block) => block.print(indent, cfg, out)
+                FmtToken::Block(block) => block.print(indent, cfg, out),
             }
         }
 
@@ -391,20 +427,63 @@ pub struct FormatCtx<'fmt, 'src> {
 }
 
 impl Visit<'_> for FormatCtx<'_, '_> {
+    fn visit_item(&mut self, i: &'_ Item) {
+        let attrs = match i {
+            Item::Const(x) => &x.attrs,
+            Item::Enum(x) => &x.attrs,
+            Item::ExternCrate(x) => &x.attrs,
+            Item::Fn(x) => &x.attrs,
+            Item::ForeignMod(x) => &x.attrs,
+            Item::Impl(x) => &x.attrs,
+            Item::Macro(x) => &x.attrs,
+            Item::Mod(x) => &x.attrs,
+            Item::Static(x) => &x.attrs,
+            Item::Struct(x) => &x.attrs,
+            Item::Trait(x) => &x.attrs,
+            Item::TraitAlias(x) => &x.attrs,
+            Item::Type(x) => &x.attrs,
+            Item::Union(x) => &x.attrs,
+            Item::Use(x) => &x.attrs,
+            _ => return,
+        };
+        if !skipped(attrs) {
+            syn::visit::visit_item(self, i)
+        }
+    }
+
+    fn visit_stmt(&mut self, i: &'_ Stmt) {
+        let attrs = match i {
+            Stmt::Local(x) => &x.attrs,
+            Stmt::Macro(x) => &x.attrs,
+            Stmt::Item(i) => return syn::visit::visit_item(self, i),
+            _ => return,
+        };
+        if !skipped(attrs) {
+            syn::visit::visit_stmt(self, i);
+        }
+    }
+
     // TODO: rewrite with a `try` block when those get stabilised
     fn visit_macro(&mut self, i: &Macro) {
         self.err = (|| -> Result<Option<Diagnostic<()>>> {
-            if let Some(macro_name) = i.path.segments.last() {
-                write!(self.temp_str_buf, "{}", macro_name.ident)
-                    .context("failed to get invoked macro path")?;
+            let Some(name) = i.path.segments.last() else {
+                return Ok(None);
+            };
+            if name.ident != "html" && name.ident != "html_nested" {
+                return Ok(None);
             }
-            let is_html = matches!(self.temp_str_buf.as_str(), "html" | "html_nested");
-            self.temp_str_buf.clear();
-            if !is_html {return Ok(None)}
 
             let span = i.delimiter.span();
             let (opening_span, closing_span) = (span.open(), span.close());
             self.print_source(opening_span.start())?;
+
+            let html_start = opening_span.end();
+            if i.tokens.is_empty() {
+                self.print_text("{", html_start)?;
+                self.print_text("}", closing_span.end())?;
+                return Ok(None);
+            }
+
             let html = match syn::parse2::<Html>(i.tokens.clone()) {
                 Ok(html) => html,
                 Err(e) => {
@@ -414,15 +493,12 @@ impl Visit<'_> for FormatCtx<'_, '_> {
                     return Ok(Some(
                         Diagnostic::error()
                             .with_message(e.to_string())
-                            .with_labels(vec![Label::primary((), start .. end)])
-                    ))
+                            .with_labels(vec![Label::primary((), start..end)]),
+                    ));
                 }
             };
-            let html_start = opening_span.end();
-            let mut block = FmtBlock::new(
-                BLOCK_CHILDREN_SPACING,
-                self.pos_to_byte_offset(html_start)?
-            );
+            let mut block =
+                FmtBlock::new(BLOCK_CHILDREN_SPACING, self.pos_to_byte_offset(html_start)?);
             html.format(&mut block, self)?;
 
             self.print_text("{", html_start)?;
@@ -435,13 +511,18 @@ impl Visit<'_> for FormatCtx<'_, '_> {
 
 impl Formatter {
     pub fn new(config: Config) -> Self {
-        Self { config, offsets: vec![], temp_str_buf: String::new(), output: String::new() }
+        Self {
+            config,
+            offsets: vec![],
+            temp_str_buf: String::new(),
+            output: String::new(),
+        }
     }
 
     pub fn format<'fmt, 'src: 'fmt>(
         &'fmt mut self,
         filename: &'src str,
-        input: &'src str
+        input: &'src str,
     ) -> Result<FormatResult<'fmt, 'src>> {
         self.output.clear();
         let mut ctx = FormatCtx {
@@ -453,12 +534,15 @@ impl Formatter {
             input,
             err: Ok(None),
             cur_offset: 0,
-            cur_pos: LineColumn { line: 1, column: 0 }
+            cur_pos: LineColumn { line: 1, column: 0 },
         };
         let file = syn::parse_file(input)?;
         ctx.offsets.push(0);
-        ctx.offsets.extend(input.char_indices()
-            .filter_map(|(i, c)| (c == '\n').then_some(i + 1)));
+        ctx.offsets.extend(
+            input
+                .char_indices()
+                .filter_map(|(i, c)| (c == '\n').then_some(i + 1)),
+        );
 
         ctx.visit_file(&file);
         ctx.finalise()
@@ -466,20 +550,25 @@ impl Formatter {
 }
 
 impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
-    fn pos_to_byte_offset(&self, LineColumn{line, column}: LineColumn) -> Result<usize> {
-        self.offsets.get(line.saturating_sub(1))
+    fn pos_to_byte_offset(&self, LineColumn { line, column }: LineColumn) -> Result<usize> {
+        self.offsets
+            .get(line.saturating_sub(1))
             .with_context(|| format!("line {line} doesn't exist in the source file"))?
             .checked_add(column)
-            .with_context(||
-                format!("source position {line}:{column} can't be converted to a byte offset"))
+            .with_context(|| {
+                format!("source position {line}:{column} can't be converted to a byte offset")
+            })
     }
 
     pub fn source_code(&self, loc: Location) -> Result<&'src str> {
-        let start = self.pos_to_byte_offset(loc.start)
+        let start = self
+            .pos_to_byte_offset(loc.start)
             .context("failed to find the start of the span")?;
-        let end = self.pos_to_byte_offset(loc.end)
+        let end = self
+            .pos_to_byte_offset(loc.end)
             .context("failed to find the end of the span")?;
-        self.input.get(start .. end)
+        self.input
+            .get(start..end)
             .with_context(|| format!("byte range {start}..{end} is invalid for the source code"))
     }
 
@@ -488,40 +577,48 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
             Space,
             CommentStart,
             Comment,
-            CommentEnd
+            CommentEnd,
         }
         let mut state = State::Space;
 
-        let &start = self.offsets.get(line - 1)
+        let &start = self
+            .offsets
+            .get(line - 1)
             .with_context(|| format!("line {line} doesn't exist in the source file"))?;
-        let line = unsafe{ self.input.get_unchecked(start ..) };
+        let line = unsafe { self.input.get_unchecked(start..) };
         for (i, ch) in line.char_indices() {
             match ch {
-                ' ' => state = match state {
-                    State::Space => continue,
-                    State::CommentStart => State::Space,
-                    State::Comment => continue,
-                    State::CommentEnd => State::Space
-                },
-                '/' => state = match state {
-                    State::Space => State::CommentStart,
-                    State::CommentStart => bail!("line {line} of the source file is empty"),
-                    State::Comment => continue,
-                    State::CommentEnd => State::Space,
-                },
-                '*' => state = match state {
-                    State::Space => continue,
-                    State::CommentStart => State::Comment,
-                    State::Comment => State::CommentEnd,
-                    State::CommentEnd => continue,
-                },
+                ' ' => {
+                    state = match state {
+                        State::Space => continue,
+                        State::CommentStart => State::Space,
+                        State::Comment => continue,
+                        State::CommentEnd => State::Space,
+                    }
+                }
+                '/' => {
+                    state = match state {
+                        State::Space => State::CommentStart,
+                        State::CommentStart => bail!("line {line} of the source file is empty"),
+                        State::Comment => continue,
+                        State::CommentEnd => State::Space,
+                    }
+                }
+                '*' => {
+                    state = match state {
+                        State::Space => continue,
+                        State::CommentStart => State::Comment,
+                        State::Comment => State::CommentEnd,
+                        State::CommentEnd => continue,
+                    }
+                }
                 '\n' => bail!("line {line} of the source file is empty"),
                 _ => match state {
                     State::Space => return Ok(i),
                     State::CommentStart => return Ok(i - 1),
                     State::Comment => continue,
                     State::CommentEnd => continue,
-                }
+                },
             }
         }
         bail!("line {line} of the source file is empty")
@@ -530,9 +627,9 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     fn print_source(&mut self, until: LineColumn) -> Result<()> {
         let until_byte = self.pos_to_byte_offset(until)?;
         let from = self.cur_offset;
-        let new = self.input.get(from .. until_byte)
-            .with_context(||
-                format!("range {from} .. {until_byte} is out of bounds for the source file"))?;
+        let new = self.input.get(from..until_byte).with_context(|| {
+            format!("range {from} .. {until_byte} is out of bounds for the source file")
+        })?;
         self.cur_offset = until_byte;
         self.cur_pos = until;
         Ok(self.output.push_str(new))
@@ -559,18 +656,18 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     fn finalise(self) -> Result<FormatResult<'fmt, 'src>> {
         self.offsets.clear();
         self.temp_str_buf.clear();
-        let rest = unsafe { self.input.get_unchecked(self.cur_offset ..) };
+        let rest = unsafe { self.input.get_unchecked(self.cur_offset..) };
         self.output.push_str(rest);
-        if !self.output.ends_with('\n') {
-            self.output.push('\n');
-        }
+        let new_len = self.output.trim_end().len();
+        self.output.truncate(new_len);
+        self.output.push('\n');
         self.err.map(|diagnostic| FormatResult {
             filename: self.filename,
             source: self.input,
             output: match diagnostic {
                 Some(diagnostic) => Err(diagnostic),
-                None => Ok(self.output.as_str())
-            }
+                None => Ok(self.output.as_str()),
+            },
         })
     }
 }
@@ -578,7 +675,7 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
 pub struct FormatResult<'fmt, 'src> {
     filename: &'src str,
     source: &'src str,
-    output: Result<&'fmt str, Diagnostic<()>>
+    output: Result<&'fmt str, Diagnostic<()>>,
 }
 
 impl<'fmt, 'src> FormatResult<'fmt, 'src> {
@@ -589,10 +686,11 @@ impl<'fmt, 'src> FormatResult<'fmt, 'src> {
             Ok(out) => return Ok(Some(out)),
             Err(x) => x,
         };
-        term::emit(writer,
+        term::emit(
+            writer,
             &term::Config::default(),
             &SimpleFile::new(self.filename, self.source),
-            &diagnostic
+            &diagnostic,
         )?;
         Ok(None)
     }

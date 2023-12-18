@@ -1,45 +1,50 @@
 #![allow(clippy::unit_arg)]
 
+mod config;
 mod formatter;
 mod html;
-mod config;
 mod utils;
 
-use std::{
-    process::{ExitCode, Command, Stdio},
-    collections::HashMap,
-    str::from_utf8,
-    fs::write,
-    io::Write,
-    path::PathBuf
-};
 use anyhow::{Context, Result};
-use clap::{Parser, ValueEnum, ColorChoice as ColorWhen};
-use codespan_reporting::term::termcolor::{ColorSpec, Color, ColorChoice, WriteColor,
-    BufferedStandardStream};
+use clap::{ColorChoice as ColorWhen, Parser, ValueEnum};
+use codespan_reporting::term::termcolor::{
+    BufferWriter, Color, ColorChoice, ColorSpec, StandardStream, WriteColor,
+};
 use config::Config;
 use diffy::{create_patch, Line};
 use formatter::Formatter;
-use utils::{KVPairs, write_with_backup, Flagged, read_into};
+use std::{
+    collections::HashMap,
+    fs::write,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    process::{Command, ExitCode, Stdio},
+    str::from_utf8,
+};
+use utils::{read_into, write_with_backup, KVPairs};
 
-fn parse_rustfmt_output<'a>(
-    input: &'a str,
-    n_files_hint: usize
-) -> HashMap<&'a str, &'a str> {
-    let mut res = HashMap::with_capacity(n_files_hint);
+fn parse_rustfmt_output<'a>(input: &'a str) -> Result<HashMap<&'a str, &'a str>> {
+    fn path_like(src: &str) -> io::Result<bool> {
+        let Some(src) = src.strip_suffix(':') else {
+            return Ok(false);
+        };
+        Path::new(src).try_exists()
+    }
+
+    let mut res = HashMap::with_capacity(0);
     let mut prev_entry: Option<&'a str> = None;
     for l in input.lines() {
-        if l.starts_with('/') && l.ends_with(':') {
+        if path_like(l)? {
             if let Some(name) = prev_entry.as_mut() {
                 let start = name.as_ptr() as usize - input.as_ptr() as usize + name.len() + 3;
                 let end = l.as_ptr() as usize - input.as_ptr() as usize;
                 unsafe {
-                    res.insert(*name, input.get_unchecked(start .. end));
-                    *name = l.get_unchecked(.. l.len() - 1);
+                    res.insert(*name, input.get_unchecked(start..end));
+                    *name = l.get_unchecked(..l.len() - 1);
                 }
             } else {
                 unsafe {
-                    prev_entry = Some(l.get_unchecked(.. l.len() - 1));
+                    prev_entry = Some(l.get_unchecked(..l.len() - 1));
                 }
             }
         }
@@ -47,10 +52,10 @@ fn parse_rustfmt_output<'a>(
     if let Some(name) = prev_entry {
         let start = name.as_ptr() as usize - input.as_ptr() as usize + name.len() + 3;
         unsafe {
-            res.insert(name, input.get_unchecked(start .. ));
+            res.insert(name, input.get_unchecked(start..));
         }
     }
-    res
+    Ok(res)
 }
 
 // `buf` must be passed into the function empty and is guaranteed to be empty after it
@@ -75,9 +80,9 @@ fn print_diff_for_file(
                 Line::Insert(line) => ('+', Some(Color::Green), line),
             };
             color_spec.set_fg(color);
-            out.set_color(&color_spec).context("failed to change diff buffer's color")?;
-            write!(out, "{prefix}{line}")
-                .context("failed to write a diff line")?;
+            out.set_color(&color_spec)
+                .context("failed to change diff buffer's color")?;
+            write!(out, "{prefix}{line}").context("failed to write a diff line")?;
             if !line.ends_with('\n') {
                 writeln!(out).context("failed to put a newline")?;
             }
@@ -96,7 +101,12 @@ enum EmitTarget {
 #[command(name = "yew-fmt", author, version, about)]
 struct Cli {
     /// Backup any modified files
-    #[arg(long, next_line_help = true, requires = "files", conflicts_with = "check")]
+    #[arg(
+        long,
+        next_line_help = true,
+        requires = "files",
+        conflicts_with = "check"
+    )]
     backup: bool,
     /// Run in 'check' mode. Exits with 0 if input is formatted correctly. Exits with 1 and prints
     /// a diff if formatting is required.
@@ -111,7 +121,7 @@ struct Cli {
         next_line_help = true,
         default_value = "",
         value_name = "key1=val1,key2=val2...",
-        hide_default_value = true,
+        hide_default_value = true
     )]
     config: KVPairs,
     /// Recursively searches the given path for the rustfmt.toml config file.
@@ -122,7 +132,12 @@ struct Cli {
     #[arg(long, next_line_help = true, value_name = "edition")]
     edition: Option<usize>,
     /// What data to emit and how
-    #[arg(long, next_line_help = true, default_value = "files", value_name = "what")]
+    #[arg(
+        long,
+        next_line_help = true,
+        default_value = "files",
+        value_name = "what"
+    )]
     emit: EmitTarget,
     /// Prints the names of mismatched files that were formatted.
     /// Prints the names of files that would be formatted when used with `--check` mode.
@@ -142,15 +157,18 @@ pub fn main() -> anyhow::Result<ExitCode> {
         ColorWhen::Always => ColorChoice::Always,
         ColorWhen::Never => ColorChoice::Never,
     };
-    let mut stdout = Flagged::new(BufferedStandardStream::stdout(color_choice));
-    let mut stderr = BufferedStandardStream::stderr(color_choice);
+    let actual_stdout = BufferWriter::stdout(color_choice);
+    let mut stdout = actual_stdout.buffer();
+    let mut stderr = StandardStream::stderr(color_choice);
     // for reading files to get the source
     let mut src_buf = vec![];
 
     let mut rustfmt = Command::new("rustfmt");
     rustfmt.arg("--color").arg(args.color.to_string());
     if !args.config.is_empty() {
-        let no_yew_fields: String = args.config.iter()
+        let no_yew_fields: String = args
+            .config
+            .iter()
             .filter(|(k, _)| !k.starts_with("yew."))
             .flat_map(|(k, v)| [",", k, "=", v])
             // TODO: replace with `intersperse` once stabilised
@@ -175,9 +193,12 @@ pub fn main() -> anyhow::Result<ExitCode> {
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output().context("failed to run rustfmt")?;
+        .output()
+        .context("failed to run rustfmt")?;
 
-    from_utf8(&rustfmt.stderr).context("failed to parse rustfmt's stderr")?.lines()
+    from_utf8(&rustfmt.stderr)
+        .context("failed to parse rustfmt's stderr")?
+        .lines()
         .skip_while(|&l| l == "Warning: Unknown configuration option `yew`")
         .for_each(|l| eprintln!("{l}"));
 
@@ -191,32 +212,38 @@ pub fn main() -> anyhow::Result<ExitCode> {
         eprintln!("Warning: Unknown configuration option `yew.{key}`");
     }
     let mut formatter = Formatter::new(config);
-    let rustfmt_stdout = from_utf8(&rustfmt.stdout)
-        .context("failed to parse rustfmt's output")?;
+    let rustfmt_stdout = from_utf8(&rustfmt.stdout).context("failed to parse rustfmt's output")?;
 
     if args.files.is_empty() {
-        let Some(out) = formatter.format("<stdin>", rustfmt_stdout)
+        let Some(out) = formatter
+            .format("<stdin>", rustfmt_stdout)
             .context("failed to parse the input")?
             .emit_error(&mut stderr)
             .context("failed to print a syntax error in the input")?
-            else { return Ok(ExitCode::FAILURE) };
+        else {
+            return Ok(ExitCode::FAILURE);
+        };
         print!("{out}");
         return Ok(ExitCode::SUCCESS);
     }
-
-    for (&file, &src) in parse_rustfmt_output(rustfmt_stdout, args.files.len()).iter() {
-        let Some(out) = formatter.format(file, src)
+    let rustfmt_output =
+        parse_rustfmt_output(rustfmt_stdout).context("failed to parse rustfmt output")?;
+    for (&file, &src) in rustfmt_output.iter() {
+        let Some(out) = formatter
+            .format(file, src)
             .with_context(|| format!("failed to parse {file:?}"))?
             .emit_error(&mut stderr)
             .with_context(|| format!("failed to print a syntax error in {file:?}"))?
-            else { return Ok(ExitCode::FAILURE) };
+        else {
+            return Ok(ExitCode::FAILURE);
+        };
 
         if args.check {
             read_into(file, &mut src_buf)
                 .with_context(|| format!("failed to read the contents of {file:?}"))?;
             if args.files_with_diff {
                 if src_buf != out.as_bytes() {
-                    println!("{file}");
+                    write!(stdout, "{file}").context("failed to write a filename to stdout")?;
                 }
             } else {
                 print_diff_for_file(&mut src_buf, &mut stdout, file, out)
@@ -226,15 +253,13 @@ pub fn main() -> anyhow::Result<ExitCode> {
         }
 
         match args.emit {
-            EmitTarget::Stdout =>
-                println!("{file}:\n\n{out}"),
+            EmitTarget::Stdout => print!("{file}:\n\n{out}"),
             EmitTarget::Files => {
                 if args.backup {
-                    write_with_backup(file, out.as_bytes())
+                    write_with_backup(file, out)
                         .with_context(|| format!("failed to write to {file:?} with backup"))?;
                 } else {
-                    write(file, out)
-                        .with_context(|| format!("failed to write to {file:?}"))?;
+                    write(file, out).with_context(|| format!("failed to write to {file:?}"))?;
                 }
                 if args.files_with_diff {
                     println!("{file}");
@@ -243,6 +268,13 @@ pub fn main() -> anyhow::Result<ExitCode> {
         }
     }
 
-    stdout.flush().context("failed to flush stderr")
-        .map(|_| if args.check && stdout.written {ExitCode::FAILURE} else {ExitCode::SUCCESS})
+    let stdout_written_to = !stdout.is_empty();
+    actual_stdout
+        .print(&stdout)
+        .context("failed to flush stdout")?;
+    Ok(if stdout_written_to {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
 }
