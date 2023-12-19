@@ -2,12 +2,15 @@ use crate::config::Config;
 use crate::html::*;
 use crate::utils::StrExt;
 use anyhow::{bail, Context, Result};
+use bumpalo::collections::Vec;
+use bumpalo::Bump;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use codespan_reporting::files::SimpleFile;
 use codespan_reporting::term;
 use codespan_reporting::term::termcolor::WriteColor;
 use proc_macro2::LineColumn;
 use std::mem::replace;
+use std::vec::Vec as StdVec;
 use syn::punctuated::Punctuated;
 use syn::{spanned::Spanned, visit::Visit, Macro};
 use syn::{Attribute, Item, Stmt};
@@ -147,28 +150,27 @@ impl Located for Location {
 }
 
 pub trait Format<'src> {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()>;
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()>;
 }
 
 /// Stores the config and allocated memory to reuse it between reformatting
 pub struct Formatter {
     config: Config,
+    /// buffer for tokens stored in `FmtBlock`s
+    tokens_buf: Bump,
     /// maps line number to byte offset in `input`
-    offsets: Vec<usize>,
-    /// for temporary strings to reuse allocations
-    temp_str_buf: String,
+    offsets: StdVec<usize>,
     /// the formatted code
     output: String,
 }
 
 /// Represents text that's not yet written: text, space, or a group of those
-#[derive(PartialEq, Eq)]
-enum FmtToken<'src> {
+enum FmtToken<'fmt, 'src> {
     Text(&'src str),
     /// needs special handling of the newline
     LineComment(&'src str),
     Sep,
-    Block(FmtBlock<'src>),
+    Block(FmtBlock<'fmt, 'src>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -184,10 +186,8 @@ impl Spacing {
     }
 }
 
-#[derive(PartialEq, Eq)]
-pub struct FmtBlock<'src> {
-    // TODO: find a way to reuse this allocation
-    tokens: Vec<FmtToken<'src>>,
+pub struct FmtBlock<'fmt, 'src> {
+    tokens: Vec<'fmt, FmtToken<'fmt, 'src>>,
     width: usize,
     broken: bool,
     spacing: Spacing,
@@ -195,10 +195,10 @@ pub struct FmtBlock<'src> {
     cur_offset: usize,
 }
 
-impl<'src> FmtBlock<'src> {
-    fn new(spacing: Spacing, start_offset: usize) -> Self {
+impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
+    fn new(alloc: &'fmt Bump, spacing: Spacing, start_offset: usize) -> Self {
         Self {
-            tokens: vec![],
+            tokens: Vec::new_in(alloc),
             width: (spacing.before || spacing.after) as usize,
             broken: false,
             spacing,
@@ -277,9 +277,9 @@ impl<'src> FmtBlock<'src> {
 
     /// adds a block and gives a mutable reference to it to `f`
     pub fn add_block<R>(&mut self, spacing: Spacing, f: impl FnOnce(&mut Self) -> R) -> R {
-        let mut block = Self::new(spacing, self.cur_offset);
+        let mut block = Self::new(self.tokens.bump(), spacing, self.cur_offset);
         let res = f(&mut block);
-        if block.tokens.last() == Some(&FmtToken::Sep) {
+        if matches!(block.tokens.last(), Some(FmtToken::Sep)) {
             block.tokens.pop();
         }
         self.width += block.width;
@@ -350,7 +350,7 @@ impl<'src> FmtBlock<'src> {
 
     fn print(&self, indent: Option<usize>, cfg: &Config, out: &mut String) {
         fn print_token(
-            token: &FmtToken<'_>,
+            token: &FmtToken<'_, '_>,
             indent: Option<usize>,
             spaced: bool,
             cfg: &Config,
@@ -407,12 +407,12 @@ impl<'src> FmtBlock<'src> {
 
 pub struct FormatCtx<'fmt, 'src> {
     pub config: &'fmt Config,
+    /// buffer for tokens stored in `FmtBlock`s
+    tokens_buf: &'fmt Bump,
     /// for error reporting purposes
     filename: &'src str,
     /// maps line number to byte offset in `input`
-    offsets: &'fmt mut Vec<usize>,
-    /// for temporary strings to reuse allocations
-    temp_str_buf: &'fmt mut String,
+    offsets: &'fmt mut StdVec<usize>,
     /// the formatted code
     output: &'fmt mut String,
     /// the source code
@@ -425,7 +425,7 @@ pub struct FormatCtx<'fmt, 'src> {
     cur_pos: LineColumn,
 }
 
-impl Visit<'_> for FormatCtx<'_, '_> {
+impl<'fmt, 'src: 'fmt> Visit<'_> for FormatCtx<'fmt, 'src> {
     fn visit_item(&mut self, i: &'_ Item) {
         let attrs = match i {
             Item::Const(x) => &x.attrs,
@@ -496,8 +496,11 @@ impl Visit<'_> for FormatCtx<'_, '_> {
                     ));
                 }
             };
-            let mut block =
-                FmtBlock::new(BLOCK_CHILDREN_SPACING, self.pos_to_byte_offset(html_start)?);
+            let mut block = FmtBlock::new(
+                self.tokens_buf,
+                BLOCK_CHILDREN_SPACING,
+                self.pos_to_byte_offset(html_start)?,
+            );
             html.format(&mut block, self)?;
 
             self.print_text("{", html_start)?;
@@ -512,8 +515,8 @@ impl Formatter {
     pub fn new(config: Config) -> Self {
         Self {
             config,
+            tokens_buf: Bump::new(),
             offsets: vec![],
-            temp_str_buf: String::new(),
             output: String::new(),
         }
     }
@@ -524,10 +527,12 @@ impl Formatter {
         input: &'src str,
     ) -> Result<FormatResult<'fmt, 'src>> {
         self.output.clear();
+        self.offsets.clear();
+        self.tokens_buf.reset();
         let mut ctx = FormatCtx {
+            tokens_buf: &self.tokens_buf,
             config: &self.config,
             offsets: &mut self.offsets,
-            temp_str_buf: &mut self.temp_str_buf,
             output: &mut self.output,
             filename,
             input,
@@ -649,7 +654,7 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     }
 
     // `end` is the position in the source file asssumed to be the end of the formatted sequence
-    fn print_fmt_block(&mut self, mut block: FmtBlock<'src>, end: LineColumn) -> Result<()> {
+    fn print_fmt_block(&mut self, mut block: FmtBlock<'fmt, 'src>, end: LineColumn) -> Result<()> {
         let indent = self.line_indent(self.cur_pos.line)?;
         block.determine_breaking(self, self.cur_pos.column - indent, indent);
         block.print(Some(indent), self.config, self.output);
@@ -659,8 +664,6 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     }
 
     fn finalise(self) -> Result<FormatResult<'fmt, 'src>> {
-        self.offsets.clear();
-        self.temp_str_buf.clear();
         let rest = unsafe { self.input.get_unchecked(self.cur_offset..) };
         self.output.push_str(rest);
         let new_len = self.output.trim_end().len();

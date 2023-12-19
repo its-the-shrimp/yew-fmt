@@ -441,7 +441,7 @@ pub const fn props_spacing(self_closing: bool) -> Spacing {
 }
 
 impl<'src> Format<'src> for Html {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         match self {
             Html::Tree(tree) => tree.format(block, ctx),
             Html::Value(val) => val.format(block, ctx),
@@ -450,7 +450,7 @@ impl<'src> Format<'src> for Html {
 }
 
 impl<'src> Format<'src> for HtmlTree {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         match self {
             HtmlTree::Element(e) => e.format(block, ctx),
             HtmlTree::Block(b) => b.format(block, ctx),
@@ -460,7 +460,7 @@ impl<'src> Format<'src> for HtmlTree {
 }
 
 impl<'src> Format<'src> for HtmlElement {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         match self {
             HtmlElement::Fragment(f) => f.format(block, ctx),
             HtmlElement::Dynamic(d) => d.format(block, ctx),
@@ -470,7 +470,7 @@ impl<'src> Format<'src> for HtmlElement {
 }
 
 impl<'src> Format<'src> for HtmlFragment {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         block.add_source(ctx, self.lt_token.loc())?;
         if let Some(key) = &self.key {
             key.format(block, ctx)?;
@@ -493,7 +493,7 @@ impl<'src> Format<'src> for HtmlFragment {
 }
 
 impl<'src> Format<'src> for HtmlDynamicElement {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         block.add_source(ctx, self.lt_token.loc())?;
         block.add_source(ctx, self.at_token.loc())?;
         self.name.format(block, ctx)?;
@@ -534,7 +534,7 @@ impl<'src> Format<'src> for HtmlDynamicElement {
 }
 
 impl<'src> Format<'src> for HtmlLiteralElement {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         block.add_source(ctx, self.lt_token.loc())?;
         block.add_source_iter(ctx, self.name.clone())?;
         let self_closing = self.closing_tag.is_none() || self.children.is_empty();
@@ -574,7 +574,7 @@ impl<'src> Format<'src> for HtmlLiteralElement {
 }
 
 impl<'src> Format<'src> for HtmlProp {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         if let Some(tilde) = &self.access_spec {
             block.add_source(ctx, tilde.loc())?;
         }
@@ -611,7 +611,7 @@ impl<'src> Format<'src> for HtmlProp {
 }
 
 impl<'src> Format<'src> for BracedExpr {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         block.add_source(ctx, self.brace.span.open().loc())?;
         block.add_source(ctx, self.expr.loc())?;
         block.add_source(ctx, self.brace.span.close().loc())
@@ -619,7 +619,7 @@ impl<'src> Format<'src> for BracedExpr {
 }
 
 impl<'src> Format<'src> for HtmlBlock {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         block.add_source(ctx, self.brace.span.open().loc())?;
         block.add_space(ctx, self.content.start())?;
         self.content.format(block, ctx)?;
@@ -630,7 +630,7 @@ impl<'src> Format<'src> for HtmlBlock {
 }
 
 impl<'src> Format<'src> for HtmlBlockContent {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         match self {
             Self::Expr(e) => block.add_source(ctx, e.loc()),
             Self::Iterable(r#for, e) => {
@@ -644,7 +644,7 @@ impl<'src> Format<'src> for HtmlBlockContent {
 }
 
 impl<'src> Format<'src> for HtmlIf {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         block.add_source(ctx, self.if_token.loc())?;
         let condition_loc = self.condition.loc();
         block.add_space(ctx, condition_loc.start)?;
@@ -671,7 +671,7 @@ impl<'src> Format<'src> for HtmlIf {
 }
 
 impl<'src> Format<'src> for HtmlElse {
-    fn format(&self, block: &mut FmtBlock<'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         match self {
             Self::If(r#else, r#if) => {
                 block.add_source(ctx, r#else.loc())?;
