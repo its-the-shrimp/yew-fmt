@@ -162,7 +162,6 @@ pub struct Formatter {
 }
 
 /// Represents text that's not yet written: text, space, or a group of those
-// TODO: handle comments
 #[derive(PartialEq, Eq)]
 enum FmtToken<'src> {
     Text(&'src str),
@@ -551,13 +550,19 @@ impl Formatter {
 
 impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     fn pos_to_byte_offset(&self, LineColumn { line, column }: LineColumn) -> Result<usize> {
-        self.offsets
+        let line_start = *self
+            .offsets
             .get(line.saturating_sub(1))
-            .with_context(|| format!("line {line} doesn't exist in the source file"))?
-            .checked_add(column)
-            .with_context(|| {
-                format!("source position {line}:{column} can't be converted to a byte offset")
-            })
+            .with_context(|| format!("line {line} doesn't exist in the source file"))?;
+        let column = self.input[line_start..]
+            .chars()
+            .take(column)
+            .map(char::len_utf8)
+            .sum();
+
+        line_start.checked_add(column).with_context(|| {
+            format!("source position {line}:{column} can't be converted to a byte offset")
+        })
     }
 
     pub fn source_code(&self, loc: Location) -> Result<&'src str> {
