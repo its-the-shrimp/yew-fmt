@@ -16,44 +16,41 @@ use formatter::Formatter;
 use std::{
     collections::HashMap,
     fs::write,
-    io::{self, Write},
-    path::{Path, PathBuf},
+    io::Write,
+    path::{Component, Path, PathBuf},
     process::{Command, ExitCode, Stdio},
     str::from_utf8,
 };
 use utils::{read_into, write_with_backup, KVPairs};
 
 fn parse_rustfmt_output<'a>(input: &'a str) -> Result<HashMap<&'a str, &'a str>> {
-    fn path_like(src: &str) -> io::Result<bool> {
-        let Some(src) = src.strip_suffix(':') else {
-            return Ok(false);
+    fn path_like(src: &str) -> bool {
+        let Some(src) = src.strip_suffix(':').filter(|x| !x.starts_with("//")) else {
+            return false;
         };
-        Path::new(src).try_exists()
+        matches!(
+            Path::new(src).components().next(),
+            Some(Component::RootDir) | Some(Component::Prefix(_))
+        )
     }
 
     let mut res = HashMap::with_capacity(0);
     let mut prev_entry: Option<&'a str> = None;
     for l in input.lines() {
-        if path_like(l)? {
+        if path_like(l) {
             if let Some(name) = prev_entry.as_mut() {
                 let start = name.as_ptr() as usize - input.as_ptr() as usize + name.len() + 3;
                 let end = l.as_ptr() as usize - input.as_ptr() as usize;
-                unsafe {
-                    res.insert(*name, input.get_unchecked(start..end));
-                    *name = l.get_unchecked(..l.len() - 1);
-                }
+                res.insert(*name, &input[start..end]);
+                *name = &l[..l.len() - 1];
             } else {
-                unsafe {
-                    prev_entry = Some(l.get_unchecked(..l.len() - 1));
-                }
+                prev_entry = Some(&l[..l.len() - 1]);
             }
         }
     }
     if let Some(name) = prev_entry {
         let start = name.as_ptr() as usize - input.as_ptr() as usize + name.len() + 3;
-        unsafe {
-            res.insert(name, input.get_unchecked(start..));
-        }
+        res.insert(name, &input[start..]);
     }
     Ok(res)
 }

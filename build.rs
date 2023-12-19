@@ -4,7 +4,11 @@ fn main() {
     use std::io::{BufWriter, Write};
 
     let mut test_suite = BufWriter::new(File::create("tests/main.rs").unwrap());
-    writeln!(test_suite, "mod common;\nuse common::cmp;\n").unwrap();
+    writeln!(
+        test_suite,
+        "//! Auto-generated from build.rs\n\nmod common;\nuse common::cmp;\n"
+    )
+    .unwrap();
 
     for entry in read_dir("tests/samples").unwrap() {
         let entry = entry.unwrap();

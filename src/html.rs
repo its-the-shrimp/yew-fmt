@@ -1,7 +1,7 @@
 use std::ops::Deref;
 
 use crate::formatter::{FmtBlock, Format, FormatCtx, Located, Location, Spacing};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use proc_macro2::{Delimiter, LineColumn, TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::{
@@ -593,7 +593,7 @@ impl<'src> Format<'src> for HtmlProp {
                 if ctx.config.yew.use_prop_init_shorthand
                     && name.len() == 1
                     && matches!(&expr.expr, Expr::Path(p)
-                        if p.path.is_ident(unsafe { &**name.first().unwrap_unchecked() }))
+                        if p.path.is_ident(&**name.first().context("prop name is empty")?))
                 {
                     return expr.format(block, ctx);
                 }
