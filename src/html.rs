@@ -210,19 +210,15 @@ impl Parse for HtmlFragment {
         } else {
             (Some(input.parse()?), input.parse()?)
         };
-        let children = HtmlTree::parse_children(input)?;
-        let closing_lt_token = input.parse()?;
-        let div_token = input.parse()?;
-        let closing_gt_token = input.parse()?;
 
         Ok(Self {
             lt_token,
             key,
             gt_token,
-            children,
-            closing_lt_token,
-            div_token,
-            closing_gt_token,
+            children: HtmlTree::parse_children(input)?,
+            closing_lt_token: input.parse()?,
+            div_token: input.parse()?,
+            closing_gt_token: input.parse()?,
         })
     }
 }
@@ -392,7 +388,7 @@ impl HtmlTree {
 
     fn parse_children(input: ParseStream) -> syn::Result<Vec<Self>> {
         let mut res = vec![];
-        while !(input.peek(Token![<]) && input.peek2(Token![/])) {
+        while !(input.is_empty() || input.peek(Token![<]) && input.peek2(Token![/])) {
             res.push(input.parse()?)
         }
         Ok(res)
@@ -679,7 +675,9 @@ impl<'src> Format<'src> for HtmlElse {
             }
             Self::Tree(r#else, brace, children) => {
                 block.add_source(ctx, r#else.loc())?;
-                block.add_source(ctx, brace.span.open().loc())?;
+                let brace_loc = brace.span.open().loc();
+                block.add_space(ctx, brace_loc.start())?;
+                block.add_source(ctx, brace_loc)?;
                 block.add_block(BLOCK_CHILDREN_SPACING, |block| {
                     anyhow::Ok({
                         for child in children {
