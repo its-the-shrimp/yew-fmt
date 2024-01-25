@@ -1,6 +1,9 @@
 use std::ops::Deref;
 
-use crate::formatter::{ChainingRule, FmtBlock, Format, FormatCtx, Located, Location, Spacing};
+use crate::{
+    formatter::{ChainingRule, FmtBlock, Format, FormatCtx, Located, Location, Spacing},
+    utils::OptionExt,
+};
 use anyhow::{Context, Result};
 use proc_macro2::{Delimiter, LineColumn, TokenStream, TokenTree};
 use quote::ToTokens;
@@ -473,7 +476,7 @@ impl<'src> Format<'src> for HtmlFragment {
         }
         block.add_source(ctx, self.gt_token.loc())?;
 
-        block.add_block(ELEMENT_CHILDREN_SPACING, ChainingRule::Off, |block| {
+        block.add_block(Some(ELEMENT_CHILDREN_SPACING), ChainingRule::Off, |block| {
             anyhow::Ok({
                 for child in &self.children {
                     child.format(block, ctx)?;
@@ -495,14 +498,18 @@ impl<'src> Format<'src> for HtmlDynamicElement {
         self.name.format(block, ctx)?;
         let self_closing = self.closing_tag.is_none() || self.children.is_empty();
 
-        block.add_block(props_spacing(self_closing), ChainingRule::On, |block| {
-            anyhow::Ok({
-                for prop in &self.props {
-                    prop.format(block, ctx)?;
-                    block.add_sep(ctx, prop.end())?;
-                }
-            })
-        })?;
+        block.add_block(
+            Some(props_spacing(self_closing)),
+            ChainingRule::On,
+            |block| {
+                anyhow::Ok({
+                    for prop in &self.props {
+                        prop.format(block, ctx)?;
+                        block.add_sep(ctx, prop.end())?;
+                    }
+                })
+            },
+        )?;
 
         let closing_tag = self
             .closing_tag
@@ -510,7 +517,7 @@ impl<'src> Format<'src> for HtmlDynamicElement {
             .filter(|_| !ctx.config.yew.self_close_elements || !self.children.is_empty());
         if let Some((gt, closing_lt, closing_at)) = closing_tag {
             block.add_source(ctx, gt.loc())?;
-            block.add_block(ELEMENT_CHILDREN_SPACING, ChainingRule::End, |block| {
+            block.add_block(Some(ELEMENT_CHILDREN_SPACING), ChainingRule::End, |block| {
                 anyhow::Ok({
                     for child in &self.children {
                         child.format(block, ctx)?;
@@ -535,14 +542,18 @@ impl<'src> Format<'src> for HtmlLiteralElement {
         block.add_source_iter(ctx, self.name.clone())?;
         let self_closing = self.closing_tag.is_none() || self.children.is_empty();
 
-        block.add_block(props_spacing(self_closing), ChainingRule::On, |block| {
-            anyhow::Ok({
-                for prop in &self.props {
-                    prop.format(block, ctx)?;
-                    block.add_sep(ctx, prop.end())?;
-                }
-            })
-        })?;
+        block.add_block(
+            Some(props_spacing(self_closing)),
+            ChainingRule::On,
+            |block| {
+                anyhow::Ok({
+                    for prop in &self.props {
+                        prop.format(block, ctx)?;
+                        block.add_sep(ctx, prop.end())?;
+                    }
+                })
+            },
+        )?;
 
         let closing_tag = self
             .closing_tag
@@ -550,7 +561,7 @@ impl<'src> Format<'src> for HtmlLiteralElement {
             .filter(|_| !ctx.config.yew.self_close_elements || !self.children.is_empty());
         if let Some((gt, closing_lt, closing_name)) = closing_tag {
             block.add_source(ctx, gt.loc())?;
-            block.add_block(ELEMENT_CHILDREN_SPACING, ChainingRule::End, |block| {
+            block.add_block(Some(ELEMENT_CHILDREN_SPACING), ChainingRule::End, |block| {
                 anyhow::Ok({
                     for child in &self.children {
                         child.format(block, ctx)?;
@@ -650,12 +661,8 @@ impl<'src> Format<'src> for HtmlIf {
         block.add_space(ctx, opening_brace_loc.start)?;
         block.add_source(ctx, opening_brace_loc)?;
         block.add_block(
-            BLOCK_CHILDREN_SPACING,
-            if self.else_branch.is_some() {
-                ChainingRule::On
-            } else {
-                ChainingRule::End
-            },
+            None,
+            self.else_branch.choose(ChainingRule::On, ChainingRule::End),
             |block| {
                 anyhow::Ok({
                     for child in &self.then_branch {
@@ -687,7 +694,7 @@ impl<'src> Format<'src> for HtmlElse {
                 let brace_loc = brace.span.open().loc();
                 block.add_space(ctx, brace_loc.start())?;
                 block.add_source(ctx, brace_loc)?;
-                block.add_block(BLOCK_CHILDREN_SPACING, ChainingRule::End, |block| {
+                block.add_block(None, ChainingRule::End, |block| {
                     anyhow::Ok({
                         for child in children {
                             child.format(block, ctx)?;

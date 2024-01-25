@@ -51,6 +51,20 @@ impl BoolExt for bool {
     }
 }
 
+pub trait OptionExt<T> {
+    fn choose<U>(&self, on_true: U, on_false: U) -> U;
+}
+
+impl<T> OptionExt<T> for Option<T> {
+    fn choose<U>(&self, on_true: U, on_false: U) -> U {
+        if self.is_some() {
+            on_true
+        } else {
+            on_false
+        }
+    }
+}
+
 #[derive(Clone)]
 #[repr(transparent)]
 pub struct KVPairs(Box<[(Box<str>, Box<str>)]>);

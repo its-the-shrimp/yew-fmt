@@ -5,5 +5,5 @@ yew::prelude::*;
 fn Comp() -> Html {
     let loading=true;
 
-    html! { if loading  { { "Loading" } } else if false { { "This shouldn't happen" } } else { { "Done" } } }
+    html! { if true { { "true" } } else { { "false" } } }
 }

@@ -20,8 +20,8 @@ fn is_skipped(attrs: &[Attribute]) -> bool {
         attr.path()
             .segments
             .iter()
-            .zip(["rustfmt", "skip"])
-            .all(|(x, y)| x.ident == y)
+            .map(|x| &x.ident)
+            .eq(["rustfmt", "skip"])
     })
 }
 
@@ -35,8 +35,9 @@ fn print_break(out: &mut String, indent: usize) {
 
 #[derive(Debug, Clone, Copy)]
 enum Comment<'src> {
-    // the initial `//` and the newline are not included
+    /// the initial `//` and the newline are not included
     Line(&'src str),
+    /// the `/*` and `*/` are not included
     Multi(&'src str),
 }
 
@@ -207,9 +208,9 @@ pub enum ChainingRule {
 pub struct FmtBlock<'fmt, 'src> {
     tokens: Vec<'fmt, FmtToken<'fmt, 'src>>,
     width: usize,
-    broken: bool,
     chaining_rule: ChainingRule,
-    spacing: Spacing,
+    /// if `None`, the block is broken, since spacing only matters when the block isn't broken
+    spacing: Option<Spacing>,
     /// offset into the source, useful for correct printing of comments
     cur_offset: usize,
 }
@@ -217,14 +218,13 @@ pub struct FmtBlock<'fmt, 'src> {
 impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     fn new(
         alloc: &'fmt Bump,
-        spacing: Spacing,
+        spacing: Option<Spacing>,
         chaining: ChainingRule,
         start_offset: usize,
     ) -> Self {
         Self {
             tokens: Vec::new_in(alloc),
-            width: (spacing.before || spacing.after) as usize,
-            broken: false,
+            width: spacing.map_or(false, |s| s.before || s.after) as usize,
             spacing,
             cur_offset: start_offset,
             chaining_rule: chaining,
@@ -269,9 +269,11 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             }
         }
 
-        Ok(if comment_added && self.spacing.before {
-            sep(self);
-        })
+        Ok(
+            if comment_added && self.spacing.map_or(true, |s| s.before) {
+                sep(self);
+            },
+        )
     }
 
     pub fn add_space(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result<()> {
@@ -292,7 +294,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
 
     fn add_raw_sep(&mut self) {
         self.tokens.push(FmtToken::Sep);
-        self.width += self.spacing.between as usize;
+        self.width += self.spacing.map_or(false, |s| s.between) as usize;
     }
 
     pub fn add_sep(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result<()> {
@@ -303,10 +305,13 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     /// adds a block and gives a mutable reference to it to `f`
     pub fn add_block<R>(
         &mut self,
-        spacing: Spacing,
+        spacing: Option<Spacing>,
         chaining: ChainingRule,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
+        if spacing.is_none() {
+            self.spacing = None;
+        }
         let mut block = Self::new(self.tokens.bump(), spacing, chaining, self.cur_offset);
         let res = f(&mut block);
         if matches!(block.tokens.last(), Some(FmtToken::Sep)) {
@@ -349,10 +354,10 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     }
 
     fn force_breaking(&mut self, ctx: &FormatCtx<'_, 'src>, offset: usize, indent: usize) {
-        self.broken = true;
+        self.spacing = None;
         self.width = 0;
         let indent = indent + ctx.config.tab_spaces;
-        let mut chain_intermediate_widths = vec![];
+        let mut chain_intermediate_widths = Vec::new_in(ctx.alloc);
         let mut chain_broken = false;
         let mut tokens_iter = self.tokens.iter_with_prev_mut();
         while let Some((token, prev_tokens)) = tokens_iter.next() {
@@ -370,7 +375,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
                     if chain_broken {
                         block.force_breaking(ctx, offset + self.width, indent)
                     } else {
-                        chain_broken = block.determine_breaking(ctx, offset + self.width, indent)
+                        chain_broken = block.determine_breaking(ctx, offset + self.width, indent);
                     }
 
                     if chain_broken {
@@ -405,26 +410,32 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         offset: usize,
         indent: usize,
     ) -> bool {
-        let max_width = offset
-            + indent
-            + self.width
-            + (self.spacing.around() && !self.tokens.is_empty()) as usize;
+        let Some(spacing) = self.spacing else {
+            self.force_breaking(ctx, offset, indent);
+            return true;
+        };
+
+        let max_width =
+            offset + indent + self.width + (spacing.around() && !self.tokens.is_empty()) as usize;
         (max_width >= ctx.config.yew.html_width)
             .on_true(|| self.force_breaking(ctx, offset, indent))
     }
 
-    fn print(&self, indent: Option<usize>, cfg: &Config, out: &mut String) {
-        fn print_token(
-            token: &FmtToken,
-            indent: Option<usize>,
-            spaced: bool,
-            cfg: &Config,
-            out: &mut String,
-        ) {
+    fn print(&self, indent: usize, cfg: &Config, out: &mut String) {
+        #[derive(Clone, Copy)]
+        enum Sep {
+            None,
+            Space,
+            Newline,
+        }
+
+        let space_if = |c| if c { Sep::Space } else { Sep::None };
+
+        fn print_token(token: &FmtToken, indent: usize, sep: Sep, cfg: &Config, out: &mut String) {
             match token {
                 FmtToken::Text(text) => out.push_str(text),
                 FmtToken::LineComment(comment) => {
-                    if let Some(indent) = indent {
+                    if let Sep::Newline = sep {
                         out.push_str("//");
                         out.push_str(comment);
                         print_break(out, indent)
@@ -434,38 +445,36 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
                         out.push_str("*/")
                     }
                 }
-                FmtToken::Sep => {
-                    if let Some(indent) = indent {
-                        print_break(out, indent)
-                    } else if spaced {
-                        out.push(' ')
-                    }
-                }
+                FmtToken::Sep => match sep {
+                    Sep::None => (),
+                    Sep::Space => out.push(' '),
+                    Sep::Newline => print_break(out, indent),
+                },
                 FmtToken::Block(block) => block.print(indent, cfg, out),
             }
         }
 
         if self.tokens.is_empty() {
-            if self.spacing.around() {
+            if self.spacing.map_or(false, |s| s.around()) {
                 out.push(' ');
             }
-        } else if let Some(old_indent) = indent.filter(|_| self.broken) {
-            let new_indent = old_indent + cfg.tab_spaces;
+        } else if let Some(spacing) = self.spacing {
+            if spacing.before {
+                out.push(' ');
+            }
+            for token in &self.tokens {
+                print_token(token, indent, space_if(spacing.between), cfg, out);
+            }
+            if spacing.after {
+                out.push(' ');
+            }
+        } else {
+            let new_indent = indent + cfg.tab_spaces;
             print_break(out, new_indent);
             for token in &self.tokens {
-                print_token(token, Some(new_indent), false, cfg, out);
+                print_token(token, new_indent, Sep::Newline, cfg, out);
             }
-            print_break(out, old_indent);
-        } else {
-            if self.spacing.before {
-                out.push(' ');
-            }
-            for token in &self.tokens {
-                print_token(token, None, self.spacing.between, cfg, out);
-            }
-            if self.spacing.after {
-                out.push(' ');
-            }
+            print_break(out, indent);
         }
     }
 }
@@ -473,7 +482,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
 pub struct FormatCtx<'fmt, 'src> {
     pub config: &'fmt Config,
     /// buffer for tokens stored in `FmtBlock`s
-    tokens_buf: &'fmt Bump,
+    alloc: &'fmt Bump,
     /// for error reporting purposes
     filename: &'src str,
     /// maps line number to byte offset in `input`
@@ -562,8 +571,8 @@ impl<'fmt, 'src: 'fmt> Visit<'_> for FormatCtx<'fmt, 'src> {
                 }
             };
             let mut block = FmtBlock::new(
-                self.tokens_buf,
-                BLOCK_CHILDREN_SPACING,
+                self.alloc,
+                Some(BLOCK_CHILDREN_SPACING),
                 ChainingRule::Off,
                 self.pos_to_byte_offset(html_start)?,
             );
@@ -596,7 +605,7 @@ impl Formatter {
         self.offsets.clear();
         self.tokens_buf.reset();
         let mut ctx = FormatCtx {
-            tokens_buf: &self.tokens_buf,
+            alloc: &self.tokens_buf,
             config: &self.config,
             offsets: &mut self.offsets,
             output: &mut self.output,
@@ -723,7 +732,7 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     fn print_fmt_block(&mut self, mut block: FmtBlock<'fmt, 'src>, end: LineColumn) -> Result<()> {
         let indent = self.line_indent(self.cur_pos.line)?;
         block.determine_breaking(self, self.cur_pos.column - indent, indent);
-        block.print(Some(indent), self.config, self.output);
+        block.print(indent, self.config, self.output);
         self.cur_pos = end;
         let off = self.pos_to_byte_offset(end)?;
         Ok(self.cur_offset = off)

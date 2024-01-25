@@ -5,12 +5,10 @@ fn Comp() -> Html {
     let loading = true;
 
     html! {
-        if loading {
-            { "Loading" }
-        } else if false {
-            { "This shouldn't happen" }
+        if true {
+            { "true" }
         } else {
-            { "Done" }
+            { "false" }
         }
     }
 }
