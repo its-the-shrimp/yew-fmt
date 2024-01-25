@@ -50,3 +50,11 @@ fn issue_8() {
         "tests/samples/issue_8/target.rs",
     )
 }
+
+#[test]
+fn issue_7() {
+    cmp(
+        "tests/samples/issue_7/source.rs",
+        "tests/samples/issue_7/target.rs",
+    )
+}

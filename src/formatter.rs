@@ -13,7 +13,7 @@ use std::mem::replace;
 use std::vec::Vec as StdVec;
 use syn::punctuated::Punctuated;
 use syn::{spanned::Spanned, visit::Visit, Macro};
-use syn::{Attribute, Item, Stmt};
+use syn::{Attribute, Item, MacroDelimiter, Stmt};
 
 fn is_skipped(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|attr| {
@@ -529,7 +529,7 @@ impl<'fmt, 'src: 'fmt> Visit<'_> for FormatCtx<'fmt, 'src> {
             Stmt::Local(x) => &x.attrs,
             Stmt::Macro(x) => &x.attrs,
             Stmt::Item(i) => return syn::visit::visit_item(self, i),
-            _ => return,
+            Stmt::Expr(e, _) => return syn::visit::visit_expr(self, e),
         };
         if !is_skipped(attrs) {
             syn::visit::visit_stmt(self, i);
@@ -546,14 +546,19 @@ impl<'fmt, 'src: 'fmt> Visit<'_> for FormatCtx<'fmt, 'src> {
                 return Ok(None);
             }
 
+            let (opening, closing, root_spacing) = match i.delimiter {
+                MacroDelimiter::Paren(_) => ("(", ")", ELEMENT_CHILDREN_SPACING),
+                MacroDelimiter::Brace(_) => ("{", "}", BLOCK_CHILDREN_SPACING),
+                MacroDelimiter::Bracket(_) => ("(", ")", ELEMENT_CHILDREN_SPACING),
+            };
             let span = i.delimiter.span();
             let (opening_span, closing_span) = (span.open(), span.close());
             self.print_source(opening_span.start())?;
 
             let html_start = opening_span.end();
             if i.tokens.is_empty() {
-                self.print_text("{", html_start)?;
-                self.print_text("}", closing_span.end())?;
+                self.print_text(opening, html_start)?;
+                self.print_text(closing, closing_span.end())?;
                 return Ok(None);
             }
 
@@ -572,15 +577,15 @@ impl<'fmt, 'src: 'fmt> Visit<'_> for FormatCtx<'fmt, 'src> {
             };
             let mut block = FmtBlock::new(
                 self.alloc,
-                Some(BLOCK_CHILDREN_SPACING),
+                Some(root_spacing),
                 ChainingRule::Off,
                 self.pos_to_byte_offset(html_start)?,
             );
             html.format(&mut block, self)?;
 
-            self.print_text("{", html_start)?;
+            self.print_text(opening, html_start)?;
             self.print_fmt_block(block, closing_span.start())?;
-            self.print_text("}", closing_span.end())?;
+            self.print_text(closing, closing_span.end())?;
             Ok(None)
         })();
     }
