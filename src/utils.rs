@@ -36,6 +36,21 @@ impl StrExt for str {
     }
 }
 
+pub trait BoolExt {
+    fn on_true(self, f: impl FnOnce()) -> Self;
+}
+
+impl BoolExt for bool {
+    fn on_true(self, f: impl FnOnce()) -> Self {
+        if self {
+            f();
+            true
+        } else {
+            false
+        }
+    }
+}
+
 #[derive(Clone)]
 #[repr(transparent)]
 pub struct KVPairs(Box<[(Box<str>, Box<str>)]>);
@@ -65,6 +80,37 @@ impl FromStr for KVPairs {
     }
 }
 
+pub struct WithPrevMut<'slice, T> {
+    inner: &'slice mut [T],
+    index: usize,
+}
+
+impl<'slice, T> WithPrevMut<'slice, T> {
+    pub fn next(&mut self) -> Option<(&mut T, &mut [T])> {
+        // Safety: if the slice is exhausted, the function will always return before reaching
+        // `.unwrap_unchecked()`
+        let res = self
+            .inner
+            .get_mut(..=self.index)
+            .map(|x| unsafe { x.split_last_mut().unwrap_unchecked() });
+        self.index += 1;
+        res
+    }
+}
+
+pub trait SliceExt<T> {
+    fn iter_with_prev_mut(&mut self) -> WithPrevMut<'_, T>;
+}
+
+impl<T> SliceExt<T> for [T] {
+    fn iter_with_prev_mut(&mut self) -> WithPrevMut<'_, T> {
+        WithPrevMut {
+            inner: self,
+            index: 0,
+        }
+    }
+}
+
 /// like `std::fs::write`, but will also create a `.bk` file
 pub fn write_with_backup(filename: &str, new_text: impl AsRef<[u8]>) -> Result<()> {
     let new_text = new_text.as_ref();
@@ -76,7 +122,7 @@ pub fn write_with_backup(filename: &str, new_text: impl AsRef<[u8]>) -> Result<(
     let mut old_text = vec![];
     file.read_to_end(&mut old_text)
         .context("failed to read the file")?;
-    Ok(if &old_text[..] != new_text {
+    Ok(if &*old_text != new_text {
         let backup = Path::new(filename).with_extension("bk");
         write(&backup, old_text)
             .with_context(|| format!("failed to create a backup file {:?}", backup.as_os_str()))?;
@@ -91,4 +137,37 @@ pub fn write_with_backup(filename: &str, new_text: impl AsRef<[u8]>) -> Result<(
 pub fn read_into(file: impl AsRef<Path>, dst: &mut Vec<u8>) -> io::Result<()> {
     dst.clear();
     File::open(file)?.read_to_end(dst).map(drop)
+}
+
+/*#[macro_export]
+macro_rules! bindings {
+    ($done:tt $(,)*) => { $done };
+    ($prev:tt, $fname:ident: $($next:tt)*) => {
+        $crate::bindings!($prev, $($next)*)
+    };
+    ($prev:tt, $name:ident :: $(, $($next:tt)*)?) => {
+        $crate::bindings!($prev, $($($next)*)?)
+    };
+    ($prev:tt, $literal:literal $(,$($next:tt)*)?) => {
+        $crate::bindings!($prev, $($($next)*)?)
+    };
+    ($prev:tt, $($tuple:ident)? ($($p:tt)*) $(, $($next:tt)*)?) => {
+        $crate::bindings!($prev, $($p)* $(, $($next)*)?)
+    };
+    ($prev:tt, $($tuple:ident)? {$($p:tt)*} $(, $($next:tt)*)?) => {
+        $crate::bindings!($prev, $($p)* $(, $($next)*)?)
+    };
+    ($prev:tt, <$($_arg:tt)*> $(, $($next:tt)*)?) => {
+        $crate::bindings!($prev, $($($next)*)?)
+    };
+    (($($prev:ident),*), $id:ident $(, $($next:tt)*)?) => {
+        $crate::bindings!(($($prev,)* $id), $($($next)*)?)
+    };
+}*/
+
+#[macro_export]
+macro_rules! map {
+    ($e:expr, $p:pat => $($binding:ident),*) => {
+        match $e { $p => Some(($($binding),*)), _ => None }
+    };
 }

@@ -1,6 +1,7 @@
 use std::fs::read;
 use std::process::{Command, Stdio};
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 pub fn cmp(source_file: &'static str, target_file: &'static str) {
     let target = read(target_file).unwrap();
     let target = String::from_utf8_lossy(&target);

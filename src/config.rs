@@ -79,9 +79,9 @@ fn parse_bool(src: &str) -> Result<bool> {
 }
 
 impl Config {
-    pub fn parse<'a>(
+    pub fn parse<'add>(
         src: &str,
-        additional: impl IntoIterator<Item = &'a (impl AsRef<str> + 'a, impl AsRef<str> + 'a)>,
+        additional: impl IntoIterator<Item = &'add (impl AsRef<str> + 'add, impl AsRef<str> + 'add)>,
     ) -> Result<Self> {
         // TODO: rewrite with `concat_idents!(parser_, $ty)` once stabilised
         macro_rules! parser {
@@ -145,9 +145,9 @@ impl Config {
         })
     }
 
-    pub fn fetch<'a>(
+    pub fn fetch<'add>(
         path: Option<&Path>,
-        additional: impl IntoIterator<Item = &'a (impl AsRef<str> + 'a, impl AsRef<str> + 'a)>,
+        additional: impl IntoIterator<Item = &'add (impl AsRef<str> + 'add, impl AsRef<str> + 'add)>,
     ) -> Result<Self> {
         macro_rules! return_parsed_if_file_exists {
             ($path:expr) => {{

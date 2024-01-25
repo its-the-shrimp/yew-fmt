@@ -22,5 +22,17 @@ serde = { version = "1.0.193", features = ["derive"] }
 dirs = "5.0.1"
 bumpalo = { version = "3.14.0", features = ["collections"] }
 
+[build-dependencies]
+anyhow = "1.0.75"
+
 [features]
 regen-tests = [] # solely for testing
+
+[lints.clippy]
+single_char_lifetime_names = "warn"
+deref_by_slicing = "warn"
+derive_partial_eq_without_eq = "warn"
+expect_used = "warn"
+unwrap_used = "warn"
+explicit_iter_loop = "warn"
+explicit_into_iter_loop = "warn"

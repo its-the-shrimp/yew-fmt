@@ -23,7 +23,7 @@ use std::{
 };
 use utils::{read_into, write_with_backup, KVPairs};
 
-fn parse_rustfmt_output<'a>(input: &'a str) -> Result<HashMap<&'a str, &'a str>> {
+fn parse_rustfmt_output<'src>(src: &'src str) -> Result<HashMap<&'src str, &'src str>> {
     fn path_like(src: &str) -> bool {
         let Some(src) = src.strip_suffix(':').filter(|x| !x.starts_with("//")) else {
             return false;
@@ -35,13 +35,13 @@ fn parse_rustfmt_output<'a>(input: &'a str) -> Result<HashMap<&'a str, &'a str>>
     }
 
     let mut res = HashMap::with_capacity(0);
-    let mut prev_entry: Option<&'a str> = None;
-    for l in input.lines() {
+    let mut prev_entry: Option<&'src str> = None;
+    for l in src.lines() {
         if path_like(l) {
             if let Some(name) = prev_entry.as_mut() {
-                let start = name.as_ptr() as usize - input.as_ptr() as usize + name.len() + 3;
-                let end = l.as_ptr() as usize - input.as_ptr() as usize;
-                res.insert(*name, &input[start..end]);
+                let start = name.as_ptr() as usize - src.as_ptr() as usize + name.len() + 3;
+                let end = l.as_ptr() as usize - src.as_ptr() as usize;
+                res.insert(*name, &src[start..end]);
                 *name = &l[..l.len() - 1];
             } else {
                 prev_entry = Some(&l[..l.len() - 1]);
@@ -49,8 +49,8 @@ fn parse_rustfmt_output<'a>(input: &'a str) -> Result<HashMap<&'a str, &'a str>>
         }
     }
     if let Some(name) = prev_entry {
-        let start = name.as_ptr() as usize - input.as_ptr() as usize + name.len() + 3;
-        res.insert(name, &input[start..]);
+        let start = name.as_ptr() as usize - src.as_ptr() as usize + name.len() + 3;
+        res.insert(name, &src[start..]);
     }
     Ok(res)
 }
@@ -225,7 +225,7 @@ pub fn main() -> anyhow::Result<ExitCode> {
     }
     let rustfmt_output =
         parse_rustfmt_output(rustfmt_stdout).context("failed to parse rustfmt output")?;
-    for (&file, &src) in rustfmt_output.iter() {
+    for (&file, &src) in &rustfmt_output {
         let Some(out) = formatter
             .format(file, src)
             .with_context(|| format!("failed to parse {file:?}"))?
