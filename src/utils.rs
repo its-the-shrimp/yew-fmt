@@ -18,10 +18,7 @@ pub trait StrExt {
 
 impl StrExt for str {
     fn last_line_len(&self) -> Option<usize> {
-        self.bytes()
-            .rev()
-            .enumerate()
-            .find_map(|(i, c)| (c == b'\n').then_some(i))
+        self.bytes().rev().enumerate().find_map(|(i, c)| (c == b'\n').then_some(i))
     }
 
     unsafe fn split_at_unchecked(&self, mid: usize) -> (&str, &str) {
@@ -33,21 +30,6 @@ impl StrExt for str {
             // SAFETY: just checked that `mid` is on a char boundary.
             (self.get_unchecked(..mid), self.get_unchecked(mid..))
         })
-    }
-}
-
-pub trait BoolExt {
-    fn on_true(self, f: impl FnOnce()) -> Self;
-}
-
-impl BoolExt for bool {
-    fn on_true(self, f: impl FnOnce()) -> Self {
-        if self {
-            f();
-            true
-        } else {
-            false
-        }
     }
 }
 
@@ -83,11 +65,7 @@ impl FromStr for KVPairs {
             return Ok(Self(Box::from([])));
         }
         s.split(',')
-            .map(|p| {
-                p.split_once('=')
-                    .map(|(k, v)| (k.into(), v.into()))
-                    .ok_or(p)
-            })
+            .map(|p| p.split_once('=').map(|(k, v)| (k.into(), v.into())).ok_or(p))
             .collect::<Result<_, _>>()
             .map_err(|p| anyhow!("invalid key=val pair: `{p}`"))
             .map(Self)
@@ -118,32 +96,24 @@ pub trait SliceExt<T> {
 
 impl<T> SliceExt<T> for [T] {
     fn iter_with_prev_mut(&mut self) -> WithPrevMut<'_, T> {
-        WithPrevMut {
-            inner: self,
-            index: 0,
-        }
+        WithPrevMut { inner: self, index: 0 }
     }
 }
 
 /// like `std::fs::write`, but will also create a `.bk` file
 pub fn write_with_backup(filename: &str, new_text: impl AsRef<[u8]>) -> Result<()> {
     let new_text = new_text.as_ref();
-    let mut file = File::options()
-        .read(true)
-        .write(true)
-        .open(filename)
-        .context("failed to open the file")?;
+    let mut file =
+        File::options().read(true).write(true).open(filename).context("failed to open the file")?;
     let mut old_text = vec![];
-    file.read_to_end(&mut old_text)
-        .context("failed to read the file")?;
+    file.read_to_end(&mut old_text).context("failed to read the file")?;
     Ok(if &*old_text != new_text {
         let backup = Path::new(filename).with_extension("bk");
         write(&backup, old_text)
             .with_context(|| format!("failed to create a backup file {:?}", backup.as_os_str()))?;
         file.rewind().context("failed to rewind the file handle")?;
         file.set_len(0).context("failed to clear the file")?;
-        file.write_all(new_text)
-            .context("failed to write new data to the file")?;
+        file.write_all(new_text).context("failed to write new data to the file")?;
     })
 }
 

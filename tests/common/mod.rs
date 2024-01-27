@@ -17,11 +17,7 @@ pub fn cmp(source_file: &'static str, target_file: &'static str) {
         String::from_utf8_lossy(&cmd.stderr)
     );
     let source = String::from_utf8_lossy(
-        &cmd.stdout[cmd
-            .stdout
-            .iter()
-            .position(|&x| x == b'\n')
-            .map_or(0, |x| x + 2)..],
+        &cmd.stdout[cmd.stdout.iter().position(|&x| x == b'\n').map_or(0, |x| x + 2)..],
     );
     assert!(
         source == target,

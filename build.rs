@@ -5,10 +5,7 @@ fn main() -> anyhow::Result<()> {
     use std::io::{BufWriter, Write};
 
     let mut test_suite = BufWriter::new(File::create("tests/main.rs")?);
-    writeln!(
-        test_suite,
-        "//! Auto-generated from build.rs\n\nmod common;\nuse common::cmp;\n"
-    )?;
+    writeln!(test_suite, "//! Auto-generated from build.rs\n\nmod common;\nuse common::cmp;\n")?;
 
     for entry in read_dir("tests/samples")? {
         let entry = entry?;
@@ -22,10 +19,7 @@ fn main() -> anyhow::Result<()> {
         src.push("source.rs");
         let dst = src.with_file_name("target.rs");
 
-        writeln!(
-            test_suite,
-            "#[test] fn {name}() {{\n\tcmp({src:?}, {dst:?})\n}}\n"
-        )?;
+        writeln!(test_suite, "#[test] fn {name}() {{\n\tcmp({src:?}, {dst:?})\n}}\n")?;
     }
     Ok(())
 }

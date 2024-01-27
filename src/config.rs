@@ -13,10 +13,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
-            tab_spaces: 4,
-            yew: YewConfig::default(),
-        }
+        Self { tab_spaces: 4, yew: YewConfig::default() }
     }
 }
 

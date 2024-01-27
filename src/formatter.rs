@@ -1,6 +1,6 @@
 use crate::config::Config;
-use crate::utils::{BoolExt, SliceExt, StrExt};
-use crate::{html::*, map};
+use crate::utils::{SliceExt, StrExt};
+use crate::html::*;
 use anyhow::{bail, Context, Result};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -16,13 +16,7 @@ use syn::{spanned::Spanned, visit::Visit, Macro};
 use syn::{Attribute, Item, MacroDelimiter, Stmt};
 
 fn is_skipped(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        attr.path()
-            .segments
-            .iter()
-            .map(|x| &x.ident)
-            .eq(["rustfmt", "skip"])
-    })
+    attrs.iter().any(|attr| attr.path().segments.iter().map(|x| &x.ident).eq(["rustfmt", "skip"]))
 }
 
 fn print_break(out: &mut String, indent: usize) {
@@ -121,10 +115,7 @@ pub trait Located {
     fn start(&self) -> LineColumn;
     fn end(&self) -> LineColumn;
     fn loc(&self) -> Location {
-        Location {
-            start: self.start(),
-            end: self.end(),
-        }
+        Location { start: self.start(), end: self.end() }
     }
 }
 
@@ -137,10 +128,7 @@ impl<T: Spanned> Located for T {
     }
     fn loc(&self) -> Location {
         let span = self.span();
-        Location {
-            start: span.start(),
-            end: span.end(),
-        }
+        Location { start: span.start(), end: span.end() }
     }
 }
 
@@ -269,11 +257,9 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             }
         }
 
-        Ok(
-            if comment_added && self.spacing.map_or(true, |s| s.before) {
-                sep(self);
-            },
-        )
+        Ok(if comment_added && self.spacing.map_or(true, |s| s.before) {
+            sep(self);
+        })
     }
 
     pub fn add_space(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result<()> {
@@ -324,9 +310,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     }
 
     pub fn add_source(&mut self, ctx: &FormatCtx<'_, 'src>, loc: Location) -> Result<()> {
-        let text = ctx
-            .source_code(loc)
-            .context("failed to get a token's source code")?;
+        let text = ctx.source_code(loc).context("failed to get a token's source code")?;
         self.add_text(text, ctx, loc.start)
     }
 
@@ -375,19 +359,17 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
 
                     if broken {
                         if !chain_broken && block.chaining_rule != ChainingRule::Off {
-                            for block in prev_tokens
-                                .iter_mut()
-                                .rev()
-                                .filter_map(|t| map!(t, FmtToken::Block(b) => b))
-                                .take_while(|b| b.chaining_rule == ChainingRule::On)
-                            {
+                            for token in prev_tokens.iter_mut().rev() {
+                                let FmtToken::Block(block) = token else { continue };
+                                if block.chaining_rule != ChainingRule::On {
+                                    break;
+                                };
                                 block.force_breaking(ctx, indent)
                             }
-                            chain_broken = block.chaining_rule == ChainingRule::On;
                         }
+                        chain_broken = block.chaining_rule == ChainingRule::On;
                         offset = 0;
                     } else {
-                        chain_broken &= block.chaining_rule != ChainingRule::End;
                         offset += block.width;
                     }
                 }
@@ -432,13 +414,22 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             return true;
         };
 
-        let max_width = offset
+        if offset
             + indent
             + self.width
-            + ((spacing.before || spacing.after) && !self.tokens.is_empty()) as usize;
-        (max_width >= ctx.config.yew.html_width).on_true(|| {
+            + ((spacing.before || spacing.after) && !self.tokens.is_empty()) as usize
+            >= ctx.config.yew.html_width
+        {
             self.force_breaking(ctx, indent);
-        })
+            return true;
+        }
+
+        if self.tokens.iter().any(|t| matches!(t, FmtToken::Block(b) if b.spacing.is_none())) {
+            self.force_breaking(ctx, indent);
+            return true;
+        }
+
+        false
     }
 
     fn print(&self, indent: usize, cfg: &Config, out: &mut String) {
@@ -613,12 +604,7 @@ impl<'fmt, 'src: 'fmt> Visit<'_> for FormatCtx<'fmt, 'src> {
 
 impl Formatter {
     pub fn new(config: Config) -> Self {
-        Self {
-            config,
-            tokens_buf: Bump::new(),
-            offsets: vec![],
-            output: String::new(),
-        }
+        Self { config, tokens_buf: Bump::new(), offsets: vec![], output: String::new() }
     }
 
     pub fn format<'fmt, 'src: 'fmt>(
@@ -642,11 +628,7 @@ impl Formatter {
         };
         let file = syn::parse_file(input)?;
         ctx.offsets.push(0);
-        ctx.offsets.extend(
-            input
-                .char_indices()
-                .filter_map(|(i, c)| (c == '\n').then_some(i + 1)),
-        );
+        ctx.offsets.extend(input.char_indices().filter_map(|(i, c)| (c == '\n').then_some(i + 1)));
 
         ctx.visit_file(&file);
         ctx.finalise()
@@ -659,11 +641,7 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
             .offsets
             .get(line.saturating_sub(1))
             .with_context(|| format!("line {line} doesn't exist in the source file"))?;
-        let column = self.input[line_start..]
-            .chars()
-            .take(column)
-            .map(char::len_utf8)
-            .sum();
+        let column = self.input[line_start..].chars().take(column).map(char::len_utf8).sum();
 
         line_start.checked_add(column).with_context(|| {
             format!("source position {line}:{column} can't be converted to a byte offset")
@@ -671,12 +649,9 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     }
 
     pub fn source_code(&self, loc: Location) -> Result<&'src str> {
-        let start = self
-            .pos_to_byte_offset(loc.start)
-            .context("failed to find the start of the span")?;
-        let end = self
-            .pos_to_byte_offset(loc.end)
-            .context("failed to find the end of the span")?;
+        let start =
+            self.pos_to_byte_offset(loc.start).context("failed to find the start of the span")?;
+        let end = self.pos_to_byte_offset(loc.end).context("failed to find the end of the span")?;
         self.input
             .get(start..end)
             .with_context(|| format!("byte range {start}..{end} is invalid for the source code"))

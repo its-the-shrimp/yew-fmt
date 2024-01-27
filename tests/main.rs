@@ -3,6 +3,14 @@
 mod common;
 use common::cmp;
 
+#[test] fn issue_10() {
+	cmp("tests/samples/issue_10/source.rs", "tests/samples/issue_10/target.rs")
+}
+
+#[test] fn breaking_propagated() {
+	cmp("tests/samples/breaking_propagated/source.rs", "tests/samples/breaking_propagated/target.rs")
+}
+
 #[test] fn issue_2() {
 	cmp("tests/samples/issue_2/source.rs", "tests/samples/issue_2/target.rs")
 }

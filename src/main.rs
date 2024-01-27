@@ -77,8 +77,7 @@ fn print_diff_for_file(
                 Line::Insert(line) => ('+', Some(Color::Green), line),
             };
             color_spec.set_fg(color);
-            out.set_color(&color_spec)
-                .context("failed to change diff buffer's color")?;
+            out.set_color(&color_spec).context("failed to change diff buffer's color")?;
             write!(out, "{prefix}{line}").context("failed to write a diff line")?;
             if !line.ends_with('\n') {
                 writeln!(out).context("failed to put a newline")?;
@@ -98,12 +97,7 @@ enum EmitTarget {
 #[command(name = "yew-fmt", author, version, about)]
 struct Cli {
     /// Backup any modified files
-    #[arg(
-        long,
-        next_line_help = true,
-        requires = "files",
-        conflicts_with = "check"
-    )]
+    #[arg(long, next_line_help = true, requires = "files", conflicts_with = "check")]
     backup: bool,
     /// Run in 'check' mode. Exits with 0 if input is formatted correctly. Exits with 1 and prints
     /// a diff if formatting is required.
@@ -129,12 +123,7 @@ struct Cli {
     #[arg(long, next_line_help = true, value_name = "edition")]
     edition: Option<usize>,
     /// What data to emit and how
-    #[arg(
-        long,
-        next_line_help = true,
-        default_value = "files",
-        value_name = "what"
-    )]
+    #[arg(long, next_line_help = true, default_value = "files", value_name = "what")]
     emit: EmitTarget,
     /// Prints the names of mismatched files that were formatted.
     /// Prints the names of files that would be formatted when used with `--check` mode.
@@ -266,12 +255,6 @@ pub fn main() -> anyhow::Result<ExitCode> {
     }
 
     let stdout_written_to = !stdout.is_empty();
-    actual_stdout
-        .print(&stdout)
-        .context("failed to flush stdout")?;
-    Ok(if stdout_written_to {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    })
+    actual_stdout.print(&stdout).context("failed to flush stdout")?;
+    Ok(if stdout_written_to { ExitCode::FAILURE } else { ExitCode::SUCCESS })
 }
