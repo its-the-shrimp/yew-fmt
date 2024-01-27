@@ -9,7 +9,7 @@ use codespan_reporting::files::SimpleFile;
 use codespan_reporting::term;
 use codespan_reporting::term::termcolor::WriteColor;
 use proc_macro2::LineColumn;
-use std::mem::replace;
+use std::mem::{replace, take};
 use std::vec::Vec as StdVec;
 use syn::punctuated::Punctuated;
 use syn::{spanned::Spanned, visit::Visit, Macro};
@@ -33,7 +33,13 @@ fn print_break(out: &mut String, indent: usize) {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+/// if `new` is 1 line, returns its length added to `prev`, otherwise returns the length of the
+/// last line of `new`.
+fn add_last_line_len(prev: usize, new: &str) -> usize {
+    new.last_line_len().unwrap_or(new.len() + prev)
+}
+
+#[derive(Clone, Copy)]
 enum Comment<'src> {
     /// the initial `//` and the newline are not included
     Line(&'src str),
@@ -48,7 +54,7 @@ impl<'src> Iterator for CommentParser<'src> {
 
     fn next(&mut self) -> Option<Self::Item> {
         /// the `usize`s are offsets into `src`
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Clone, Copy)]
         enum ParserState {
             None,
             Start(usize),
@@ -181,19 +187,13 @@ pub struct Spacing {
     pub after: bool,
 }
 
-impl Spacing {
-    const fn around(&self) -> bool {
-        self.before && self.after
-    }
-}
-
 /// Chains are sequences of formatting blocks that are all broken if one of them is broken; in a
 /// sequence of formatting blocks, a chain will have the following shape:
 /// `[..., Off, On, On, ..., On, End, Off, ...]`
 /// where the words are the names of the variants of [`ChainingRule`].
 /// A chain starts from a [`ChainingRule::On`] variant but ends with a [`ChainingRule::End`]; this
 /// is done to make the chains declare their end on their own without having to add an addition
-/// variant [`FmtToken`], and to also avoid the possibility of 2 unrelated chains getting
+/// variant to [`FmtToken`], and to also avoid the possibility of 2 unrelated chains getting
 /// misinterpreted as 1.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ChainingRule {
@@ -224,7 +224,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     ) -> Self {
         Self {
             tokens: Vec::new_in(alloc),
-            width: spacing.map_or(false, |s| s.before || s.after) as usize,
+            width: 0,
             spacing,
             cur_offset: start_offset,
             chaining_rule: chaining,
@@ -353,51 +353,68 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         })
     }
 
-    fn force_breaking(&mut self, ctx: &FormatCtx<'_, 'src>, offset: usize, indent: usize) {
+    fn force_breaking(&mut self, ctx: &FormatCtx<'_, 'src>, indent: usize) {
         self.spacing = None;
         self.width = 0;
+        let mut offset = 0;
         let indent = indent + ctx.config.tab_spaces;
-        let mut chain_intermediate_widths = Vec::new_in(ctx.alloc);
         let mut chain_broken = false;
         let mut tokens_iter = self.tokens.iter_with_prev_mut();
         while let Some((token, prev_tokens)) = tokens_iter.next() {
             match token {
-                FmtToken::Text(text) => {
-                    if let Some(len) = text.last_line_len() {
-                        self.width = len;
+                FmtToken::Text(text) => offset = add_last_line_len(offset, text),
+                FmtToken::LineComment(comment) => offset += comment.len() + 4,
+                FmtToken::Sep => offset = 0,
+                FmtToken::Block(block) => {
+                    let broken = if chain_broken {
+                        block.force_breaking(ctx, indent);
+                        true
                     } else {
-                        self.width += text.len();
+                        block.determine_breaking(ctx, offset, indent)
+                    };
+
+                    if broken {
+                        if !chain_broken && block.chaining_rule != ChainingRule::Off {
+                            for block in prev_tokens
+                                .iter_mut()
+                                .rev()
+                                .filter_map(|t| map!(t, FmtToken::Block(b) => b))
+                                .take_while(|b| b.chaining_rule == ChainingRule::On)
+                            {
+                                block.force_breaking(ctx, indent)
+                            }
+                            chain_broken = block.chaining_rule == ChainingRule::On;
+                        }
+                        offset = 0;
+                    } else {
+                        chain_broken &= block.chaining_rule != ChainingRule::End;
+                        offset += block.width;
                     }
                 }
-                FmtToken::LineComment(comment) => self.width += comment.len() + 4,
-                FmtToken::Sep => self.width = 0,
-                FmtToken::Block(block) => {
-                    if chain_broken {
-                        block.force_breaking(ctx, offset + self.width, indent)
-                    } else {
-                        chain_broken = block.determine_breaking(ctx, offset + self.width, indent);
-                    }
-
-                    if chain_broken {
-                        for (block, intermediate_width) in prev_tokens
-                            .iter_mut()
-                            .rev()
-                            .filter_map(|t| map!(t, FmtToken::Block(b) => b))
-                            .zip(chain_intermediate_widths.drain(..).rev())
-                        {
-                            block.force_breaking(ctx, offset + intermediate_width, indent)
+            }
+            if !chain_broken && indent + offset > ctx.config.yew.html_width {
+                let mut first = true;
+                offset = 0;
+                for token in prev_tokens.iter_mut().rev() {
+                    let block = match token {
+                        FmtToken::Text(text) => {
+                            offset = add_last_line_len(offset, text);
+                            continue;
                         }
-                    } else {
-                        match block.chaining_rule {
-                            ChainingRule::Off => (),
-                            ChainingRule::End => {
-                                chain_intermediate_widths.clear();
-                                chain_broken = false
-                            }
-                            ChainingRule::On => chain_intermediate_widths.push(self.width),
+                        FmtToken::LineComment(comment) => {
+                            offset += comment.len();
+                            continue;
                         }
+                        FmtToken::Sep => break,
+                        FmtToken::Block(block) => block,
+                    };
+                    if take(&mut first) {
+                        chain_broken = block.chaining_rule == ChainingRule::On
+                    } else if block.chaining_rule != ChainingRule::On {
+                        break;
                     }
-                    self.width += block.width;
+                    block.force_breaking(ctx, indent);
+                    offset = 0
                 }
             }
         }
@@ -411,14 +428,17 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         indent: usize,
     ) -> bool {
         let Some(spacing) = self.spacing else {
-            self.force_breaking(ctx, offset, indent);
+            self.force_breaking(ctx, indent);
             return true;
         };
 
-        let max_width =
-            offset + indent + self.width + (spacing.around() && !self.tokens.is_empty()) as usize;
-        (max_width >= ctx.config.yew.html_width)
-            .on_true(|| self.force_breaking(ctx, offset, indent))
+        let max_width = offset
+            + indent
+            + self.width
+            + ((spacing.before || spacing.after) && !self.tokens.is_empty()) as usize;
+        (max_width >= ctx.config.yew.html_width).on_true(|| {
+            self.force_breaking(ctx, indent);
+        })
     }
 
     fn print(&self, indent: usize, cfg: &Config, out: &mut String) {
@@ -455,7 +475,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         }
 
         if self.tokens.is_empty() {
-            if self.spacing.map_or(false, |s| s.around()) {
+            if self.spacing.map_or(false, |s| s.before || s.after) {
                 out.push(' ');
             }
         } else if let Some(spacing) = self.spacing {
@@ -737,6 +757,7 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     fn print_fmt_block(&mut self, mut block: FmtBlock<'fmt, 'src>, end: LineColumn) -> Result<()> {
         let indent = self.line_indent(self.cur_pos.line)?;
         block.determine_breaking(self, self.cur_pos.column - indent, indent);
+        //panic!("{block:#?}");
         block.print(indent, self.config, self.output);
         self.cur_pos = end;
         let off = self.pos_to_byte_offset(end)?;

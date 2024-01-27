@@ -8,7 +8,7 @@ use std::{
 };
 
 pub trait StrExt {
-    /// Returns the length of the last line of the string, or None if the string has only 1 line
+    /// Returns the length of the last line of the string, or `None` if the string is 1 line.
     fn last_line_len(&self) -> Option<usize>;
     /// Unchecked version of `split_at`, caller must ensure that `self.is_char_boundary(mid)`
     unsafe fn split_at_unchecked(&self, mid: usize) -> (&str, &str);

@@ -540,10 +540,13 @@ impl<'src> Format<'src> for HtmlLiteralElement {
     fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         block.add_source(ctx, self.lt_token.loc())?;
         block.add_source_iter(ctx, self.name.clone())?;
-        let self_closing = self.closing_tag.is_none() || self.children.is_empty();
+        let closing_tag = self
+            .closing_tag
+            .as_ref()
+            .filter(|_| !self.children.is_empty() || !ctx.config.yew.self_close_elements);
 
         block.add_block(
-            Some(props_spacing(self_closing)),
+            Some(props_spacing(closing_tag.is_none())),
             ChainingRule::On,
             |block| {
                 anyhow::Ok({
@@ -555,10 +558,6 @@ impl<'src> Format<'src> for HtmlLiteralElement {
             },
         )?;
 
-        let closing_tag = self
-            .closing_tag
-            .as_ref()
-            .filter(|_| !ctx.config.yew.self_close_elements || !self.children.is_empty());
         if let Some((gt, closing_lt, closing_name)) = closing_tag {
             block.add_source(ctx, gt.loc())?;
             block.add_block(Some(ELEMENT_CHILDREN_SPACING), ChainingRule::End, |block| {

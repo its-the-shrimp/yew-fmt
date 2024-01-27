@@ -23,10 +23,9 @@ pub fn cmp(source_file: &'static str, target_file: &'static str) {
             .position(|&x| x == b'\n')
             .map_or(0, |x| x + 2)..],
     );
-    if source != target {
-        panic!(
-            "source and target differ:\n{}",
-            diffy::create_patch(&target, &source)
-        );
-    }
+    assert!(
+        source == target,
+        "source and target differ:\n{}",
+        diffy::create_patch(&target, &source)
+    );
 }
