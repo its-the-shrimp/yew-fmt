@@ -1,9 +1,10 @@
 use crate::utils::StrExt;
 use anyhow::{anyhow, bail, Context, Result};
 use dirs::{config_dir, home_dir};
-use serde::Deserialize;
-use std::{env::current_dir, fs::read_to_string, io, num::ParseIntError, path::Path};
-use toml::{map::Map, Value};
+use serde::{Deserialize, Deserializer};
+use std::{
+    collections::HashMap, env::current_dir, fs::read_to_string, io, num::ParseIntError, path::Path,
+};
 
 #[derive(Clone)]
 pub struct Config {
@@ -23,7 +24,7 @@ pub struct YewConfig {
     pub unwrap_literal_prop_values: bool,
     pub use_prop_init_shorthand: bool,
     pub self_close_elements: bool,
-    pub unknown: Map<String, Value>,
+    pub unknown: HashMap<String, Unknown>,
 }
 
 impl Default for YewConfig {
@@ -33,7 +34,7 @@ impl Default for YewConfig {
             unwrap_literal_prop_values: true,
             use_prop_init_shorthand: false,
             self_close_elements: true,
-            unknown: Map::new(),
+            unknown: Default::default(),
         }
     }
 }
@@ -47,6 +48,16 @@ struct RawConfig {
     yew: RawConfigYew,
 }
 
+/// exists to avoid any handling of the values of unknown keys
+#[derive(Clone, Copy)]
+pub struct Unknown;
+
+impl<'de> Deserialize<'de> for Unknown {
+    fn deserialize<D: Deserializer<'de>>(_: D) -> Result<Self, D::Error> {
+        Ok(Self)
+    }
+}
+
 #[derive(Deserialize, Default)]
 struct RawConfigYew {
     html_width: Option<usize>,
@@ -54,7 +65,7 @@ struct RawConfigYew {
     use_prop_init_shorthand: Option<bool>,
     self_close_elements: Option<bool>,
     #[serde(flatten)]
-    unknown: Map<String, Value>,
+    unknown: HashMap<String, Unknown>,
 }
 
 fn parse_usize(src: &str) -> Result<usize, ParseIntError> {
@@ -107,13 +118,13 @@ impl Config {
                         }
                     )+
                     k => if let Some(k) = k.strip_prefix("yew.") {
-                        $cfg.yew.unknown.insert(k.to_owned(), Value::Boolean(false));
+                        $cfg.yew.unknown.insert(k.to_owned(), Unknown);
                     }
                 }
             }};
         }
 
-        let mut raw: RawConfig = toml::from_str(src)?;
+        let mut raw: RawConfig = basic_toml::from_str(src)?;
         for (key, value) in additional {
             parse_field!(key.as_ref(), value.as_ref(), raw.{
                 tab_spaces: usize,

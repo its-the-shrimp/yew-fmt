@@ -1,6 +1,6 @@
 use crate::config::Config;
-use crate::utils::{SliceExt, StrExt};
 use crate::html::*;
+use crate::utils::{SliceExt, StrExt};
 use anyhow::{bail, Context, Result};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
