@@ -38,11 +38,11 @@ pub trait OptionExt<T> {
 }
 
 impl<T> OptionExt<T> for Option<T> {
-    fn choose<U>(&self, on_true: U, on_false: U) -> U {
+    fn choose<U>(&self, on_some: U, on_none: U) -> U {
         if self.is_some() {
-            on_true
+            on_some
         } else {
-            on_false
+            on_none
         }
     }
 }

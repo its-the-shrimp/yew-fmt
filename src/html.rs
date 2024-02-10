@@ -1,9 +1,6 @@
 use std::{iter::from_fn, ops::Deref};
 
-use crate::{
-    formatter::{ChainingRule, FmtBlock, Format, FormatCtx, Located, Location, Spacing},
-    utils::OptionExt,
-};
+use crate::formatter::{ChainingRule, FmtBlock, Format, FormatCtx, Located, Location, Spacing};
 use anyhow::{Context, Result};
 use proc_macro2::{Delimiter, LineColumn, TokenStream, TokenTree};
 use quote::ToTokens;
@@ -454,7 +451,7 @@ impl<'src> Format<'src> for HtmlFragment {
         }
         block.add_source(ctx, self.gt_token.loc())?;
 
-        block.add_block(Some(ELEMENT_CHILDREN_SPACING), ChainingRule::Off, |block| {
+        block.add_block(ELEMENT_CHILDREN_SPACING, ChainingRule::Off, |block| {
             for child in &self.children {
                 child.format(block, ctx)?;
                 block.add_sep(ctx, child.end())?;
@@ -478,7 +475,7 @@ impl<'src> Format<'src> for HtmlDynamicElement {
             .as_ref()
             .filter(|_| !self.children.is_empty() || !ctx.config.yew.self_close_elements);
 
-        block.add_block(Some(props_spacing(closing_tag.is_none())), ChainingRule::On, |block| {
+        block.add_block(props_spacing(closing_tag.is_none()), ChainingRule::On, |block| {
             for prop in &self.props {
                 prop.format(block, ctx)?;
                 block.add_sep(ctx, prop.end())?;
@@ -488,7 +485,7 @@ impl<'src> Format<'src> for HtmlDynamicElement {
 
         if let Some((gt, closing_lt, closing_at)) = closing_tag {
             block.add_source(ctx, gt.loc())?;
-            block.add_block(Some(ELEMENT_CHILDREN_SPACING), ChainingRule::End, |block| {
+            block.add_block(ELEMENT_CHILDREN_SPACING, ChainingRule::End, |block| {
                 for child in &self.children {
                     child.format(block, ctx)?;
                     block.add_sep(ctx, child.end())?;
@@ -515,7 +512,7 @@ impl<'src> Format<'src> for HtmlLiteralElement {
             .as_ref()
             .filter(|_| !self.children.is_empty() || !ctx.config.yew.self_close_elements);
 
-        block.add_block(Some(props_spacing(closing_tag.is_none())), ChainingRule::On, |block| {
+        block.add_block(props_spacing(closing_tag.is_none()), ChainingRule::On, |block| {
             for prop in &self.props {
                 prop.format(block, ctx)?;
                 block.add_sep(ctx, prop.end())?;
@@ -530,7 +527,7 @@ impl<'src> Format<'src> for HtmlLiteralElement {
 
         if let Some((gt, closing_lt, closing_name)) = closing_tag {
             block.add_source(ctx, gt.loc())?;
-            block.add_block(Some(ELEMENT_CHILDREN_SPACING), ChainingRule::End, |block| {
+            block.add_block(ELEMENT_CHILDREN_SPACING, ChainingRule::End, |block| {
                 for child in &self.children {
                     child.format(block, ctx)?;
                     block.add_sep(ctx, child.end())?;
@@ -628,17 +625,13 @@ impl<'src> Format<'src> for HtmlIf {
         let opening_brace_loc = self.brace.span.open().loc();
         block.add_space(ctx, opening_brace_loc.start)?;
         block.add_source(ctx, opening_brace_loc)?;
-        block.add_block(
-            None,
-            self.else_branch.choose(ChainingRule::On, ChainingRule::End),
-            |block| {
-                for child in &self.then_branch {
-                    child.format(block, ctx)?;
-                    block.add_sep(ctx, child.end())?;
-                }
-                anyhow::Ok(())
-            },
-        )?;
+        block.add_broken_block(|block| {
+            for child in &self.then_branch {
+                child.format(block, ctx)?;
+                block.add_sep(ctx, child.end())?;
+            }
+            anyhow::Ok(())
+        })?;
         block.add_source(ctx, self.brace.span.close().loc())?;
 
         Ok(if let Some(else_branch) = &self.else_branch {
@@ -661,7 +654,7 @@ impl<'src> Format<'src> for HtmlElse {
                 let brace_loc = brace.span.open().loc();
                 block.add_space(ctx, brace_loc.start())?;
                 block.add_source(ctx, brace_loc)?;
-                block.add_block(None, ChainingRule::End, |block| {
+                block.add_broken_block(|block| {
                     for child in children {
                         child.format(block, ctx)?;
                         block.add_sep(ctx, child.end())?;

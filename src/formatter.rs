@@ -177,7 +177,7 @@ pub struct Spacing {
 
 /// Chains are sequences of formatting blocks that are all broken if one of them is broken; in a
 /// sequence of formatting blocks, a chain will have the following shape:
-/// `[..., Off, On, On, ..., On, End, Off, ...]`
+/// `[..., Off, Full, Forward, ..., Full, End, Off, ...]`
 /// where the words are the names of the variants of [`ChainingRule`].
 /// A chain starts from a [`ChainingRule::On`] variant but ends with a [`ChainingRule::End`]; this
 /// is done to make the chains declare their end on their own without having to add an addition
@@ -187,10 +187,17 @@ pub struct Spacing {
 pub enum ChainingRule {
     /// no chaining
     Off,
-    /// ends a chain
+    /// ends a chain (while being inside it itself) and does not break the blocks before it in the
+    /// chain if broken
     End,
-    /// inside a chain
+    /// inside a chain and breaks the blocks before it in the chain if broken
     On,
+}
+
+impl ChainingRule {
+    pub const fn is_on(&self) -> bool {
+        matches!(self, Self::On)
+    }
 }
 
 pub struct FmtBlock<'fmt, 'src> {
@@ -291,14 +298,11 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     /// adds a block and gives a mutable reference to it to `f`
     pub fn add_block<R>(
         &mut self,
-        spacing: Option<Spacing>,
+        spacing: Spacing,
         chaining: ChainingRule,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
-        if spacing.is_none() {
-            self.spacing = None;
-        }
-        let mut block = Self::new(self.tokens.bump(), spacing, chaining, self.cur_offset);
+        let mut block = Self::new(self.tokens.bump(), Some(spacing), chaining, self.cur_offset);
         let res = f(&mut block);
         if matches!(block.tokens.last(), Some(FmtToken::Sep)) {
             block.tokens.pop();
@@ -306,6 +310,18 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         self.width += block.width;
         self.cur_offset = block.cur_offset;
         self.tokens.push(FmtToken::Block(block));
+        res
+    }
+
+    pub fn add_broken_block<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let mut block = Self::new(self.tokens.bump(), None, ChainingRule::Off, self.cur_offset);
+        let res = f(&mut block);
+        if matches!(block.tokens.last(), Some(FmtToken::Sep)) {
+            block.tokens.pop();
+        }
+        self.cur_offset = block.cur_offset;
+        self.tokens.push(FmtToken::Block(block));
+        self.spacing = None;
         res
     }
 
@@ -358,19 +374,19 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
                     };
 
                     if broken {
-                        if !chain_broken && block.chaining_rule != ChainingRule::Off {
+                        if !chain_broken && block.chaining_rule.is_on() {
                             for token in prev_tokens.iter_mut().rev() {
                                 let FmtToken::Block(block) = token else { continue };
-                                if block.chaining_rule != ChainingRule::On {
+                                if !block.chaining_rule.is_on() {
                                     break;
                                 };
                                 block.force_breaking(ctx, indent)
                             }
+                            chain_broken = true
                         }
-                        chain_broken = block.chaining_rule == ChainingRule::On;
-                        offset = 0;
+                        offset = 0
                     } else {
-                        offset += block.width;
+                        offset += block.width
                     }
                 }
             }
@@ -378,25 +394,23 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
                 let mut first = true;
                 offset = 0;
                 for token in prev_tokens.iter_mut().rev() {
-                    let block = match token {
-                        FmtToken::Text(text) => {
-                            offset = add_last_line_len(offset, text);
-                            continue;
-                        }
-                        FmtToken::LineComment(comment) => {
-                            offset += comment.len();
-                            continue;
-                        }
+                    match token {
+                        FmtToken::Text(text) => offset = add_last_line_len(offset, text),
+                        FmtToken::LineComment(comment) => offset += comment.len(),
                         FmtToken::Sep => break,
-                        FmtToken::Block(block) => block,
-                    };
-                    if take(&mut first) {
-                        chain_broken = block.chaining_rule == ChainingRule::On
-                    } else if block.chaining_rule != ChainingRule::On {
-                        break;
+                        FmtToken::Block(block) => {
+                            if take(&mut first) {
+                                chain_broken = block.chaining_rule.is_on();
+                                block.force_breaking(ctx, indent);
+                                offset = 0
+                            } else if chain_broken {
+                                block.force_breaking(ctx, indent);
+                                offset = 0
+                            } else {
+                                offset += block.width
+                            }
+                        }
                     }
-                    block.force_breaking(ctx, indent);
-                    offset = 0
                 }
             }
         }
