@@ -466,7 +466,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         }
 
         if self.tokens.is_empty() {
-            if self.spacing.map_or(false, |s| s.before || s.after) {
+            if self.spacing.map_or(false, |s| s.before && s.after) {
                 out.push(' ');
             }
         } else if let Some(spacing) = self.spacing {

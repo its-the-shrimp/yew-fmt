@@ -1,19 +1,26 @@
 use std::fs::read;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
-pub fn cmp(source_file: &'static str, target_file: &'static str) {
-    let target = read(target_file).unwrap();
+pub fn cmp(test_name: &'static str) {
+    let mut file_name = PathBuf::from(test_name);
+
+    file_name.push("target.rs");
+    let target = read(&file_name).unwrap();
     let target = String::from_utf8_lossy(&target);
+
+    file_name.set_file_name("source.rs");
     let cmd = Command::new(env!("CARGO_BIN_EXE_yew-fmt"))
-        .args(["--emit", "stdout", source_file])
+        .args(["--emit", "stdout"])
+        .arg(&file_name)
         .stdin(Stdio::null())
         .output()
         .expect("yew-fmt should be invoked");
     assert!(
         cmd.status.success(),
         "`yew-fmt --emit stdout {:?}` finished with a non-zero exit code\noutput:\n{}",
-        source_file,
+        &file_name,
         String::from_utf8_lossy(&cmd.stderr)
     );
     let source = String::from_utf8_lossy(

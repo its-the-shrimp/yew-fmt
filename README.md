@@ -38,6 +38,15 @@ Maximum width of an HTML node before falling back to vertical formatting.
 
 ### `yew.use_prop_init_shorthand`
 Use prop initialiser shorthand if possible.
+Example:
+```html
+<div id={id} />
+```
+would become
+```html
+<div {id} />
+```
+
 - Default value: inherited from
     [`use_field_init_shorthand`](https://rust-lang.github.io/rustfmt#use_field_init_shorthand)
 - Possible values: `true`, `false`

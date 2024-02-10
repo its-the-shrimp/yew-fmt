@@ -9,17 +9,10 @@ fn main() -> anyhow::Result<()> {
 
     for entry in read_dir("tests/samples")? {
         let entry = entry?;
-        let mut src = entry.path();
-        let name = src
-            .file_name()
-            .context("no filename")?
-            .to_str()
-            .context("invalid filename")?
-            .to_owned();
-        src.push("source.rs");
-        let dst = src.with_file_name("target.rs");
+        let path = entry.path();
+        let name = path.file_name().context("no filename")?.to_str().context("invalid filename")?;
 
-        writeln!(test_suite, "#[test] fn {name}() {{\n\tcmp({src:?}, {dst:?})\n}}\n")?;
+        writeln!(test_suite, "#[test]\nfn {name}() {{\n    cmp({path:?})\n}}\n")?;
     }
     Ok(())
 }
