@@ -35,48 +35,84 @@ On top of those, `yew-fmt` provides the following options of its own:
 Maximum width of an HTML node before falling back to vertical formatting.
 - Default value: inherited from [`max_width`](https://rust-lang.github.io/rustfmt#max_width)
 - Possible values: any positive integer
+### `yew.use_small_heuristics`
+Along with `yew.html_width`, different kinds of nodes have different rules for when to be broken up. This option controls what set of rules to use.
+- Default value: inherited from [`use_small_heuristics`](https://rust-lang.github.io/rustfmt#use_small_heuristics)
+- Possible values: `"Default"`, `"Off"`, `"Max"`
+#### `Default`
+Elements are not broken up if they have no children or if all their children are block nodes, otherwise they're broken up.</br>
+`if` nodes are always broken up
+```html
+<div>
+    <code>{ "panic!(" }{ msg }{ ")" }</code>
+</div>
+if condition {
+    <p>{ "Something else" }</p>
+}
+```
+#### `Max`
+Elements can only be broken up due to exceeding `yew.html_width`.</br>
+`if` nodes will remain on 1 line unless they exceed `yew.html_width`
+```html
+<div><code>{ "panic!(" }{ msg }{ ")" }</code></div>
+if condition { <p>{ "Something else" }</p> }
+```
+#### `Off`
+Elements and `if` nodes are always broken up
+```html
+<div>
+    <code>
+        { "panic!(" }
+        { msg }
+        { ")" }
+    </code>
+</div>
+if condition {
+    <p>
+        { "Something else" }
+    </p>
+}
+```
 
 ### `yew.use_prop_init_shorthand`
 Use prop initialiser shorthand if possible.
-Example:
+- Default value: inherited from
+    [`use_field_init_shorthand`](https://rust-lang.github.io/rustfmt#use_field_init_shorthand)
+- Possible values: `true`, `false`
+#### `false`
 ```html
 <div id={id} />
 ```
-would become
+#### `true`
 ```html
 <div {id} />
 ```
 
-- Default value: inherited from
-    [`use_field_init_shorthand`](https://rust-lang.github.io/rustfmt#use_field_init_shorthand)
-- Possible values: `true`, `false`
-
 ### `yew.unwrap_literal_prop_values`
 Remove braces around prop initialisers if they consist of only a literal.
-Example:
-```html
-<div id={"foo"} />
-```
-would become
-```html
-<div id="foo" />
-```
-
 - Default value: `true`
 - Possible values: `true`, `false`
+#### `false`
+```html
+<div id={"foo"} class="bar" />
+```
+#### `true`
+```html
+<div id="foo" class="bar" />
+```
 
 ### `yew.self_close_elements`
 Make elements self-closed if they have no children.
-Example:
+- Default value: `true`
+- Possible values: `true`, `false`
+#### `false`
 ```html
 <div id="foo"></div>
 ```
-would become
+#### `true`
 ```html
 <div id="foo" />
 ```
-- Default value: `true`
-- Possible values: `true`, `false`
 
 ## Keep in mind, work is still in progress
 As the project is very early on in development, not all CLI options of `rustfmt` are supported, yet the eventual target of the project is 100% compatibility, so all the ❌ in the table 
