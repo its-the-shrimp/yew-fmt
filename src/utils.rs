@@ -155,3 +155,7 @@ macro_rules! map {
         match $e { $p => Some(($($binding),*)), _ => None }
     };
 }
+
+pub fn default<T: Default>() -> T {
+    T::default()
+}

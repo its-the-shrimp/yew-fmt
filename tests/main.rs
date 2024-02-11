@@ -29,6 +29,11 @@ fn issue_3() {
 }
 
 #[test]
+fn no_small_heuristics() {
+    cmp("tests/samples/no_small_heuristics")
+}
+
+#[test]
 fn issue_13() {
     cmp("tests/samples/issue_13")
 }
@@ -39,8 +44,18 @@ fn issue_14() {
 }
 
 #[test]
+fn max_small_heuristics() {
+    cmp("tests/samples/max_small_heuristics")
+}
+
+#[test]
 fn issue_12() {
     cmp("tests/samples/issue_12")
+}
+
+#[test]
+fn elements_broken_up() {
+    cmp("tests/samples/elements_broken_up")
 }
 
 #[test]

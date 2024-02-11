@@ -1,4 +1,4 @@
-use std::fs::read;
+use std::fs::read_to_string;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -7,12 +7,16 @@ pub fn cmp(test_name: &'static str) {
     let mut file_name = PathBuf::from(test_name);
 
     file_name.push("target.rs");
-    let target = read(&file_name).unwrap();
-    let target = String::from_utf8_lossy(&target);
+    let target = read_to_string(&file_name).unwrap();
+    let config = if let Some(no_config_prefix) = target.strip_prefix("// config: ") {
+        no_config_prefix.split_once('\n').expect("config spec not terminated").0
+    } else {
+        ""
+    };
 
     file_name.set_file_name("source.rs");
     let cmd = Command::new(env!("CARGO_BIN_EXE_yew-fmt"))
-        .args(["--emit", "stdout"])
+        .args(["--emit", "stdout", "--config", config])
         .arg(&file_name)
         .stdin(Stdio::null())
         .output()

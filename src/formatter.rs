@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::html::*;
-use crate::utils::{SliceExt, StrExt};
+use crate::utils::{default, SliceExt, StrExt};
 use anyhow::{bail, Context, Result};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -176,6 +176,10 @@ pub struct Spacing {
     pub after: bool,
 }
 
+impl Spacing {
+    pub const AROUND: Self = Self { before: true, between: false, after: true };
+}
+
 /// Chains are sequences of formatting blocks that are all broken if one of them is broken; in a
 /// sequence of formatting blocks, a chain will have the following shape:
 /// `[..., Off, Full, Forward, ..., Full, End, Off, ...]`
@@ -306,30 +310,21 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     /// adds a block and gives a mutable reference to it to `f`
     pub fn add_block<R>(
         &mut self,
-        spacing: Spacing,
+        spacing: Option<Spacing>,
         chaining: ChainingRule,
         f: impl FnOnce(&mut Self) -> R,
     ) -> R {
-        let mut block = Self::new(self.tokens.bump(), Some(spacing), chaining, self.cur_offset);
+        let mut block = Self::new(self.tokens.bump(), spacing, chaining, self.cur_offset);
         let res = f(&mut block);
         if matches!(block.tokens.last(), Some(FmtToken::Sep)) {
             block.tokens.pop();
         }
-        self.width += block.width;
-        self.cur_offset = block.cur_offset;
-        self.tokens.push(FmtToken::Block(block));
-        res
-    }
-
-    pub fn add_broken_block<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        let mut block = Self::new(self.tokens.bump(), None, ChainingRule::Off, self.cur_offset);
-        let res = f(&mut block);
-        if matches!(block.tokens.last(), Some(FmtToken::Sep)) {
-            block.tokens.pop();
+        match spacing {
+            Some(_) => self.width += block.width,
+            None => self.spacing = None,
         }
         self.cur_offset = block.cur_offset;
         self.tokens.push(FmtToken::Block(block));
-        self.spacing = None;
         res
     }
 
@@ -374,15 +369,11 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
                 FmtToken::LineComment(comment) => offset += comment.len() + 4,
                 FmtToken::Sep => offset = 0,
                 FmtToken::Block(block) => {
-                    let broken = if chain_broken {
+                    if chain_broken {
                         block.force_breaking(ctx, indent);
-                        true
-                    } else {
-                        block.determine_breaking(ctx, offset, indent)
-                    };
-
-                    if broken {
-                        if !chain_broken && block.chaining_rule.is_on() {
+                        chain_broken = block.chaining_rule.is_on()
+                    } else if block.determine_breaking(ctx, offset, indent) {
+                        if block.chaining_rule.is_on() {
                             for token in prev_tokens.iter_mut().rev() {
                                 let FmtToken::Block(block) = token else { continue };
                                 if !block.chaining_rule.is_on() {
@@ -584,9 +575,8 @@ impl<'fmt, 'src: 'fmt> Visit<'_> for FormatCtx<'fmt, 'src> {
             }
 
             let (opening, closing, root_spacing) = match i.delimiter {
-                MacroDelimiter::Paren(_) => ("(", ")", ELEMENT_CHILDREN_SPACING),
-                MacroDelimiter::Brace(_) => ("{", "}", BLOCK_CHILDREN_SPACING),
-                MacroDelimiter::Bracket(_) => ("(", ")", ELEMENT_CHILDREN_SPACING),
+                MacroDelimiter::Paren(_) | MacroDelimiter::Bracket(_) => ("(", ")", default()),
+                MacroDelimiter::Brace(_) => ("{", "}", Spacing::AROUND),
             };
             let span = i.delimiter.span();
             let (opening_span, closing_span) = (span.open(), span.close());
