@@ -82,3 +82,4 @@ fn issue_9() {
 fn issue_7() {
     cmp("tests/samples/issue_7")
 }
+
