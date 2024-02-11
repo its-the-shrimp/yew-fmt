@@ -160,6 +160,7 @@ pub struct Formatter {
 }
 
 /// Represents text that's not yet written: text, space, or a group of those
+#[derive(Debug)]
 enum FmtToken<'fmt, 'src> {
     Text(&'src str),
     /// needs special handling of the newline
@@ -168,7 +169,7 @@ enum FmtToken<'fmt, 'src> {
     Block(FmtBlock<'fmt, 'src>),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub struct Spacing {
     pub before: bool,
     pub between: bool,
@@ -183,7 +184,7 @@ pub struct Spacing {
 /// is done to make the chains declare their end on their own without having to add an addition
 /// variant to [`FmtToken`], and to also avoid the possibility of 2 unrelated chains getting
 /// misinterpreted as 1.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ChainingRule {
     /// no chaining
     Off,
@@ -200,6 +201,7 @@ impl ChainingRule {
     }
 }
 
+#[derive(Debug)]
 pub struct FmtBlock<'fmt, 'src> {
     tokens: Vec<'fmt, FmtToken<'fmt, 'src>>,
     width: usize,
@@ -241,14 +243,16 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         self.width += comment.len() + 4;
     }
 
-    fn add_comment(
+    fn add_comments_with_sep(
         &mut self,
-        src: &'src str,
-        until: usize,
+        ctx: &FormatCtx<'_, 'src>,
+        until: LineColumn,
         mut sep: impl FnMut(&mut Self),
     ) -> Result<()> {
+        let until = ctx.pos_to_byte_offset(until)?;
         let range = self.cur_offset..until;
-        let comment = src
+        let comment = ctx
+            .input
             .get(range.clone())
             .with_context(|| format!("span {range:?} is out of bounds for the source"))?;
         self.cur_offset = until;
@@ -264,14 +268,18 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             }
         }
 
-        Ok(if comment_added && self.spacing.map_or(true, |s| s.before) {
+        Ok(if comment_added && self.spacing.map_or(false, |s| s.between) {
             sep(self);
         })
     }
 
+    pub fn add_comments(&mut self, ctx: &FormatCtx<'_, 'src>, until: LineColumn) -> Result<()> {
+        self.add_comments_with_sep(ctx, until, Self::add_raw_space)
+    }
+
     pub fn add_space(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result<()> {
         self.add_raw_space();
-        self.add_comment(ctx.input, ctx.pos_to_byte_offset(at)?, Self::add_raw_space)
+        self.add_comments(ctx, at)
     }
 
     fn add_text(
@@ -280,7 +288,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         ctx: &FormatCtx<'_, 'src>,
         at: LineColumn,
     ) -> Result<()> {
-        self.add_comment(ctx.input, ctx.pos_to_byte_offset(at)?, Self::add_raw_space)?;
+        self.add_comments(ctx, at)?;
         self.add_raw_text(text);
         Ok(self.cur_offset += text.len())
     }
@@ -292,7 +300,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
 
     pub fn add_sep(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result<()> {
         self.add_raw_sep();
-        self.add_comment(ctx.input, ctx.pos_to_byte_offset(at)?, Self::add_raw_sep)
+        self.add_comments_with_sep(ctx, at, Self::add_raw_sep)
     }
 
     /// adds a block and gives a mutable reference to it to `f`
@@ -396,7 +404,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
                 for token in prev_tokens.iter_mut().rev() {
                     match token {
                         FmtToken::Text(text) => offset = add_last_line_len(offset, text),
-                        FmtToken::LineComment(comment) => offset += comment.len(),
+                        FmtToken::LineComment(comment) => offset += comment.len() + 4,
                         FmtToken::Sep => break,
                         FmtToken::Block(block) => {
                             if take(&mut first) {
@@ -499,7 +507,11 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             for token in &self.tokens {
                 print_token(token, new_indent, Sep::Newline, cfg, out);
             }
-            print_break(out, indent);
+            if let Some(FmtToken::LineComment(_)) = self.tokens.last() {
+                out.truncate(out.len() - 4)
+            } else {
+                print_break(out, indent)
+            }
         }
     }
 }

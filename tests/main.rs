@@ -34,6 +34,11 @@ fn issue_13() {
 }
 
 #[test]
+fn issue_14() {
+    cmp("tests/samples/issue_14")
+}
+
+#[test]
 fn issue_12() {
     cmp("tests/samples/issue_12")
 }

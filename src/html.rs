@@ -235,15 +235,17 @@ impl Parse for HtmlDynamicElement {
             props.push(input.parse()?)
         }
 
-        let (children, closing_tag) = if input.peek(Token![>]) {
+        let (children, closing_tag, div_token) = if input.peek(Token![>]) {
             let gt_token = input.parse()?;
-            (HtmlTree::parse_children(input)?, Some((gt_token, input.parse()?, input.parse()?)))
+            let children = HtmlTree::parse_children(input)?;
+            let closing_lt_token = input.parse()?;
+            let div_token = input.parse()?;
+            let closing_at_token = input.parse()?;
+            (children, Some((gt_token, closing_lt_token, closing_at_token)), div_token)
         } else {
-            (vec![], None)
+            (vec![], None, input.parse()?)
         };
 
-        let div_token = input.parse()?;
-        let closing_gt_token = input.parse()?;
         Ok(Self {
             lt_token,
             at_token,
@@ -252,7 +254,7 @@ impl Parse for HtmlDynamicElement {
             children,
             closing_tag,
             div_token,
-            closing_gt_token,
+            closing_gt_token: input.parse()?,
         })
     }
 }
@@ -265,8 +267,6 @@ impl Parse for HtmlLiteralElement {
             })
         }
 
-        let lt_token = input.parse()?;
-
         fn get_name(input: ParseStream) -> syn::Result<TokenStream> {
             Ok(if let Ok(ty) = Type::parse(input) {
                 ty.into_token_stream()
@@ -275,13 +275,14 @@ impl Parse for HtmlLiteralElement {
                 name.into_token_stream()
             })
         }
+
+        let lt_token = input.parse()?;
         let name = get_name(input)?;
 
         let mut props = vec![];
         while input.cursor().punct().is_none() {
             props.push(input.parse()?)
         }
-
         let prop_base = if input.peek(Token![..]) {
             Some((input.parse()?, parse2(prop_base_collector(input).collect())?))
         } else {
@@ -299,8 +300,6 @@ impl Parse for HtmlLiteralElement {
             (vec![], None, input.parse()?)
         };
 
-        let closing_gt_token = input.parse()?;
-
         Ok(Self {
             lt_token,
             name,
@@ -309,7 +308,7 @@ impl Parse for HtmlLiteralElement {
             children,
             closing_tag,
             div_token,
-            closing_gt_token,
+            closing_gt_token: input.parse()?,
         })
     }
 }
@@ -451,15 +450,17 @@ impl<'src> Format<'src> for HtmlFragment {
         }
         block.add_source(ctx, self.gt_token.loc())?;
 
+        let closing_tag_start = self.closing_lt_token.loc();
         block.add_block(ELEMENT_CHILDREN_SPACING, ChainingRule::Off, |block| {
             for child in &self.children {
                 child.format(block, ctx)?;
                 block.add_sep(ctx, child.end())?;
             }
+            block.add_comments(ctx, closing_tag_start.start())?;
             anyhow::Ok(())
         })?;
 
-        block.add_source(ctx, self.closing_lt_token.loc())?;
+        block.add_source(ctx, closing_tag_start)?;
         block.add_source(ctx, self.div_token.loc())?;
         block.add_source(ctx, self.closing_gt_token.loc())
     }
@@ -484,15 +485,18 @@ impl<'src> Format<'src> for HtmlDynamicElement {
         })?;
 
         if let Some((gt, closing_lt, closing_at)) = closing_tag {
+            let closing_tag_start = closing_lt.loc();
+
             block.add_source(ctx, gt.loc())?;
             block.add_block(ELEMENT_CHILDREN_SPACING, ChainingRule::End, |block| {
                 for child in &self.children {
                     child.format(block, ctx)?;
                     block.add_sep(ctx, child.end())?;
                 }
+                block.add_comments(ctx, closing_tag_start.start())?;
                 anyhow::Ok(())
             })?;
-            block.add_source(ctx, closing_lt.loc())?;
+            block.add_source(ctx, closing_tag_start)?;
             block.add_source(ctx, self.div_token.loc())?;
             block.add_source(ctx, closing_at.loc())?;
             block.add_source(ctx, self.closing_gt_token.loc())
@@ -526,15 +530,18 @@ impl<'src> Format<'src> for HtmlLiteralElement {
         })?;
 
         if let Some((gt, closing_lt, closing_name)) = closing_tag {
+            let closing_tag_start = closing_lt.loc();
+
             block.add_source(ctx, gt.loc())?;
             block.add_block(ELEMENT_CHILDREN_SPACING, ChainingRule::End, |block| {
                 for child in &self.children {
                     child.format(block, ctx)?;
                     block.add_sep(ctx, child.end())?;
                 }
+                block.add_comments(ctx, closing_tag_start.start())?;
                 anyhow::Ok(())
             })?;
-            block.add_source(ctx, closing_lt.loc())?;
+            block.add_source(ctx, closing_tag_start)?;
             block.add_source(ctx, self.div_token.loc())?;
             block.add_source_iter(ctx, closing_name.clone())?;
             block.add_source(ctx, self.closing_gt_token.loc())
