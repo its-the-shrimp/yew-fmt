@@ -49,6 +49,11 @@ fn max_small_heuristics() {
 }
 
 #[test]
+fn html_for() {
+    cmp("tests/samples/html_for")
+}
+
+#[test]
 fn issue_12() {
     cmp("tests/samples/issue_12")
 }

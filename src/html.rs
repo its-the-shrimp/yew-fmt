@@ -17,7 +17,7 @@ use syn::{
     punctuated::Punctuated,
     spanned::Spanned,
     token::Brace,
-    Expr, Ident, Lit, Token, Type,
+    Expr, Ident, Lit, Pat, Token, Type,
 };
 
 /// Overrides `Ident`'s default `Parse` behaviour by accepting Rust keywords
@@ -51,6 +51,7 @@ pub enum HtmlTree {
     Element(Box<HtmlElement>),
     Block(Box<HtmlBlock>),
     If(Box<HtmlIf>),
+    For(Box<HtmlFor>),
 }
 
 pub struct HtmlBlock {
@@ -130,12 +131,21 @@ pub enum HtmlElse {
     Tree(Token![else], Brace, Vec<HtmlTree>),
 }
 
+pub struct HtmlFor {
+    pub for_token: Token![for],
+    pub pat: Pat,
+    pub in_token: Token![in],
+    pub iter: Expr,
+    pub brace: Brace,
+    pub body: Vec<HtmlTree>,
+}
+
 impl Parse for Html {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         Ok(if HtmlTree::parseable(input.cursor()) {
             Self::Tree(input.parse()?)
         } else {
-            Self::Value(Box::new(input.parse()?))
+            Self::Value(input.parse()?)
         })
     }
 }
@@ -143,11 +153,13 @@ impl Parse for Html {
 impl Parse for HtmlTree {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         Ok(if HtmlIf::parseable(input.cursor()) {
-            Self::If(Box::new(input.parse()?))
+            Self::If(input.parse()?)
+        } else if HtmlFor::parseable(input.cursor()) {
+            Self::For(input.parse()?)
         } else if HtmlElement::parseable(input.cursor()) {
-            Self::Element(Box::new(input.parse()?))
+            Self::Element(input.parse()?)
         } else {
-            Self::Block(Box::new(input.parse()?))
+            Self::Block(input.parse()?)
         })
     }
 }
@@ -340,32 +352,45 @@ impl Parse for HtmlProp {
 impl Parse for BracedExpr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let inner;
-        let brace = braced!(inner in input);
-        Ok(Self { brace, expr: inner.parse()? })
+        Ok(Self { brace: braced!(inner in input), expr: inner.parse()? })
     }
 }
 
 impl Parse for HtmlIf {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let if_token = input.parse()?;
-        let condition = Expr::parse_without_eager_brace(input)?;
         let then_block;
-        let brace = braced!(then_block in input);
-        let then_branch = HtmlTree::parse_children(&then_block)?;
-        let else_branch = HtmlElse::parseable(input.cursor()).then(|| input.parse()).transpose()?;
-        Ok(Self { if_token, condition, brace, then_branch, else_branch })
+        Ok(Self {
+            if_token: input.parse()?,
+            condition: Expr::parse_without_eager_brace(input)?,
+            brace: braced!(then_block in input),
+            then_branch: HtmlTree::parse_children(&then_block)?,
+            else_branch: HtmlElse::parseable(input.cursor()).then(|| input.parse()).transpose()?,
+        })
     }
 }
 
 impl Parse for HtmlElse {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let else_token = <Token![else]>::parse(input)?;
+        let else_token = input.parse()?;
         Ok(if HtmlIf::parseable(input.cursor()) {
-            Self::If(else_token, Box::new(input.parse()?))
+            Self::If(else_token, input.parse()?)
         } else {
             let inner;
-            let brace = braced!(inner in input);
-            Self::Tree(else_token, brace, HtmlTree::parse_children(&inner)?)
+            Self::Tree(else_token, braced!(inner in input), HtmlTree::parse_children(&inner)?)
+        })
+    }
+}
+
+impl Parse for HtmlFor {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let body;
+        Ok(Self {
+            for_token: input.parse()?,
+            pat: Pat::parse_multi_with_leading_vert(input)?,
+            in_token: input.parse()?,
+            iter: Expr::parse_without_eager_brace(input)?,
+            brace: braced!(body in input),
+            body: HtmlTree::parse_children(&body)?,
         })
     }
 }
@@ -374,6 +399,7 @@ impl HtmlTree {
     fn parseable(cursor: Cursor<'_>) -> bool {
         cursor.eof()
             || HtmlIf::parseable(cursor)
+            || HtmlFor::parseable(cursor)
             || HtmlElement::parseable(cursor)
             || HtmlBlock::parseable(cursor)
     }
@@ -405,6 +431,12 @@ impl HtmlIf {
 impl HtmlElse {
     fn parseable(cursor: Cursor) -> bool {
         cursor.ident().is_some_and(|(i, _)| i == "else")
+    }
+}
+
+impl HtmlFor {
+    fn parseable(cursor: Cursor) -> bool {
+        cursor.ident().is_some_and(|(i, _)| i == "for")
     }
 }
 
@@ -441,6 +473,7 @@ impl<'src> Format<'src> for HtmlTree {
             HtmlTree::Element(e) => e.format(block, ctx),
             HtmlTree::Block(b) => b.format(block, ctx),
             HtmlTree::If(i) => i.format(block, ctx),
+            HtmlTree::For(f) => f.format(block, ctx),
         }
     }
 }
@@ -457,36 +490,35 @@ impl<'src> Format<'src> for HtmlElement {
 
 impl<'src> Format<'src> for HtmlFragment {
     fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        block.add_source(ctx, self.lt_token.loc())?;
+        block.add_source(ctx, self.lt_token)?;
         if let Some(key) = &self.key {
             key.format(block, ctx)?;
         }
-        block.add_source(ctx, self.gt_token.loc())?;
 
-        let closing_tag_start = self.closing_lt_token.loc();
-        block.add_block(
+        block.add_delimited_block(
+            ctx,
+            self.gt_token,
+            self.closing_lt_token,
             element_children_spacing(ctx, &self.children),
             ChainingRule::Off,
-            |block| {
+            |block, ctx| {
                 for child in &self.children {
                     child.format(block, ctx)?;
                     block.add_sep(ctx, child.end())?;
                 }
-                block.add_comments(ctx, closing_tag_start.start())?;
-                anyhow::Ok(())
+                Ok(())
             },
         )?;
 
-        block.add_source(ctx, closing_tag_start)?;
-        block.add_source(ctx, self.div_token.loc())?;
-        block.add_source(ctx, self.closing_gt_token.loc())
+        block.add_source(ctx, self.div_token)?;
+        block.add_source(ctx, self.closing_gt_token)
     }
 }
 
 impl<'src> Format<'src> for HtmlDynamicElement {
     fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        block.add_source(ctx, self.lt_token.loc())?;
-        block.add_source(ctx, self.at_token.loc())?;
+        block.add_source(ctx, self.lt_token)?;
+        block.add_source(ctx, self.at_token)?;
         self.name.format(block, ctx)?;
         let closing_tag = self
             .closing_tag
@@ -502,35 +534,33 @@ impl<'src> Format<'src> for HtmlDynamicElement {
         })?;
 
         if let Some((gt, closing_lt, closing_at)) = closing_tag {
-            let closing_tag_start = closing_lt.loc();
-
-            block.add_source(ctx, gt.loc())?;
-            block.add_block(
+            block.add_delimited_block(
+                ctx,
+                gt,
+                closing_lt,
                 element_children_spacing(ctx, &self.children),
                 ChainingRule::End,
-                |block| {
+                |block, ctx| {
                     for child in &self.children {
                         child.format(block, ctx)?;
                         block.add_sep(ctx, child.end())?;
                     }
-                    block.add_comments(ctx, closing_tag_start.start())?;
-                    anyhow::Ok(())
+                    Ok(())
                 },
             )?;
-            block.add_source(ctx, closing_tag_start)?;
-            block.add_source(ctx, self.div_token.loc())?;
-            block.add_source(ctx, closing_at.loc())?;
-            block.add_source(ctx, self.closing_gt_token.loc())
+            block.add_source(ctx, self.div_token)?;
+            block.add_source(ctx, closing_at)?;
+            block.add_source(ctx, self.closing_gt_token)
         } else {
-            block.add_source(ctx, self.div_token.loc())?;
-            block.add_source(ctx, self.closing_gt_token.loc())
+            block.add_source(ctx, self.div_token)?;
+            block.add_source(ctx, self.closing_gt_token)
         }
     }
 }
 
 impl<'src> Format<'src> for HtmlLiteralElement {
     fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        block.add_source(ctx, self.lt_token.loc())?;
+        block.add_source(ctx, self.lt_token)?;
         block.add_source_iter(ctx, self.name.clone())?;
         let closing_tag = self
             .closing_tag
@@ -546,8 +576,8 @@ impl<'src> Format<'src> for HtmlLiteralElement {
                     block.add_sep(ctx, prop.end())?;
                 }
                 if let Some((dotdot, prop_base)) = &self.prop_base {
-                    block.add_source(ctx, dotdot.loc())?;
-                    block.add_source(ctx, prop_base.loc())?;
+                    block.add_source(ctx, dotdot)?;
+                    block.add_source(ctx, prop_base)?;
                     block.add_sep(ctx, prop_base.end())?;
                 }
                 anyhow::Ok(())
@@ -555,28 +585,26 @@ impl<'src> Format<'src> for HtmlLiteralElement {
         )?;
 
         if let Some((gt, closing_lt, closing_name)) = closing_tag {
-            let closing_tag_start = closing_lt.loc();
-
-            block.add_source(ctx, gt.loc())?;
-            block.add_block(
+            block.add_delimited_block(
+                ctx,
+                gt,
+                closing_lt,
                 element_children_spacing(ctx, &self.children),
                 ChainingRule::End,
-                |block| {
+                |block, ctx| {
                     for child in &self.children {
                         child.format(block, ctx)?;
                         block.add_sep(ctx, child.end())?;
                     }
-                    block.add_comments(ctx, closing_tag_start.start())?;
-                    anyhow::Ok(())
+                    Ok(())
                 },
             )?;
-            block.add_source(ctx, closing_tag_start)?;
-            block.add_source(ctx, self.div_token.loc())?;
+            block.add_source(ctx, self.div_token)?;
             block.add_source_iter(ctx, closing_name.clone())?;
-            block.add_source(ctx, self.closing_gt_token.loc())
+            block.add_source(ctx, self.closing_gt_token)
         } else {
-            block.add_source(ctx, self.div_token.loc())?;
-            block.add_source(ctx, self.closing_gt_token.loc())
+            block.add_source(ctx, self.div_token)?;
+            block.add_source(ctx, self.closing_gt_token)
         }
     }
 }
@@ -584,18 +612,18 @@ impl<'src> Format<'src> for HtmlLiteralElement {
 impl<'src> Format<'src> for HtmlProp {
     fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         if let Some(tilde) = &self.access_spec {
-            block.add_source(ctx, tilde.loc())?;
+            block.add_source(ctx, tilde)?;
         }
         match &self.kind {
             HtmlPropKind::Shortcut(brace, name) => {
-                block.add_source(ctx, brace.span.open().loc())?;
+                block.add_source(ctx, brace.span.open())?;
                 block.add_source_punctuated(ctx, name)?;
-                block.add_source(ctx, brace.span.close().loc())
+                block.add_source(ctx, brace.span.close())
             }
             HtmlPropKind::Literal(name, eq, lit) => {
                 block.add_source_punctuated(ctx, name)?;
-                block.add_source(ctx, eq.loc())?;
-                block.add_source(ctx, lit.loc())
+                block.add_source(ctx, eq)?;
+                block.add_source(ctx, lit)
             }
             HtmlPropKind::Expr(name, eq, expr) => {
                 if ctx.config.yew.use_prop_init_shorthand
@@ -607,9 +635,9 @@ impl<'src> Format<'src> for HtmlProp {
                 }
 
                 block.add_source_punctuated(ctx, name)?;
-                block.add_source(ctx, eq.loc())?;
+                block.add_source(ctx, eq)?;
                 if ctx.config.yew.unwrap_literal_prop_values && matches!(expr.expr, Expr::Lit(_)) {
-                    block.add_source(ctx, expr.expr.loc())
+                    block.add_source(ctx, &expr.expr)
                 } else {
                     expr.format(block, ctx)
                 }
@@ -620,32 +648,27 @@ impl<'src> Format<'src> for HtmlProp {
 
 impl<'src> Format<'src> for BracedExpr {
     fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        block.add_source(ctx, self.brace.span.open().loc())?;
-        block.add_source(ctx, self.expr.loc())?;
-        block.add_source(ctx, self.brace.span.close().loc())
+        block.add_source(ctx, self.brace.span.open())?;
+        block.add_source(ctx, &self.expr)?;
+        block.add_source(ctx, self.brace.span.close())
     }
 }
 
 impl<'src> Format<'src> for HtmlBlock {
     fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
-        block.add_source(ctx, self.brace.span.open().loc())?;
-        block.add_space(ctx, self.content.start())?;
-        self.content.format(block, ctx)?;
-        let closing_brace_loc = self.brace.span.close().loc();
-        block.add_space(ctx, closing_brace_loc.start)?;
-        block.add_source(ctx, closing_brace_loc)
+        block.add_source(ctx, self.brace.span.open())?;
+        self.content.format_with_space(block, ctx)?;
+        block.add_source_with_space(ctx, self.brace.span.close())
     }
 }
 
 impl<'src> Format<'src> for HtmlBlockContent {
     fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         match self {
-            Self::Expr(e) => block.add_source(ctx, e.loc()),
+            Self::Expr(e) => block.add_source(ctx, e),
             Self::Iterable(r#for, e) => {
-                block.add_source(ctx, r#for.loc())?;
-                let expr_loc = e.loc();
-                block.add_space(ctx, expr_loc.start())?;
-                block.add_source(ctx, expr_loc)
+                block.add_source(ctx, r#for)?;
+                block.add_source_with_space(ctx, e)
             }
         }
     }
@@ -654,30 +677,22 @@ impl<'src> Format<'src> for HtmlBlockContent {
 impl<'src> Format<'src> for HtmlIf {
     fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         block.add_source(ctx, self.if_token.loc())?;
-        let condition_loc = self.condition.loc();
-        block.add_space(ctx, condition_loc.start)?;
-        block.add_source(ctx, condition_loc)?;
-
-        let opening_brace_loc = self.brace.span.open().loc();
-        block.add_space(ctx, opening_brace_loc.start)?;
-        block.add_source(ctx, opening_brace_loc)?;
-        block.add_block(
+        block.add_source_with_space(ctx, &self.condition)?;
+        block.add_delimited_block_with_space(
+            ctx,
+            self.brace.span.open(),
+            self.brace.span.close(),
             block_children_spacing(ctx),
             self.else_branch.choose(ChainingRule::On, ChainingRule::End),
-            |block| {
+            |block, ctx| {
                 for child in &self.then_branch {
                     child.format(block, ctx)?;
                     block.add_sep(ctx, child.end())?;
                 }
-                anyhow::Ok(())
+                Ok(())
             },
         )?;
-        block.add_source(ctx, self.brace.span.close().loc())?;
-
-        Ok(if let Some(else_branch) = &self.else_branch {
-            block.add_space(ctx, else_branch.start())?;
-            else_branch.format(block, ctx)?;
-        })
+        self.else_branch.as_ref().try_map_or((), |b| b.format_with_space(block, ctx))
     }
 }
 
@@ -685,25 +700,50 @@ impl<'src> Format<'src> for HtmlElse {
     fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
         match self {
             Self::If(r#else, r#if) => {
-                block.add_source(ctx, r#else.loc())?;
-                block.add_space(ctx, r#if.start())?;
-                r#if.format(block, ctx)
+                block.add_source(ctx, r#else)?;
+                r#if.format_with_space(block, ctx)
             }
             Self::Tree(r#else, brace, children) => {
-                block.add_source(ctx, r#else.loc())?;
-                let brace_loc = brace.span.open().loc();
-                block.add_space(ctx, brace_loc.start())?;
-                block.add_source(ctx, brace_loc)?;
-                block.add_block(block_children_spacing(ctx), ChainingRule::End, |block| {
-                    for child in children {
-                        child.format(block, ctx)?;
-                        block.add_sep(ctx, child.end())?;
-                    }
-                    anyhow::Ok(())
-                })?;
-                block.add_source(ctx, brace.span.close().loc())
+                block.add_source(ctx, r#else)?;
+                block.add_delimited_block_with_space(
+                    ctx,
+                    brace.span.open(),
+                    brace.span.close(),
+                    block_children_spacing(ctx),
+                    ChainingRule::End,
+                    |block, ctx| {
+                        for child in children {
+                            child.format(block, ctx)?;
+                            block.add_sep(ctx, child.end())?;
+                        }
+                        Ok(())
+                    },
+                )
             }
         }
+    }
+}
+
+impl<'src> Format<'src> for HtmlFor {
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()> {
+        block.add_source(ctx, self.for_token)?;
+        block.add_source_with_space(ctx, &self.pat)?;
+        block.add_source_with_space(ctx, self.in_token)?;
+        block.add_source_with_space(ctx, &self.iter)?;
+        block.add_delimited_block_with_space(
+            ctx,
+            self.brace.span.open(),
+            self.brace.span.close(),
+            block_children_spacing(ctx),
+            ChainingRule::Off,
+            |block, ctx| {
+                for child in &self.body {
+                    child.format(block, ctx)?;
+                    block.add_sep(ctx, child.end())?;
+                }
+                Ok(())
+            },
+        )
     }
 }
 
@@ -713,6 +753,7 @@ impl Located for HtmlTree {
             Self::Element(x) => x.start(),
             Self::Block(x) => x.start(),
             Self::If(x) => x.start(),
+            Self::For(x) => x.start(),
         }
     }
 
@@ -721,6 +762,7 @@ impl Located for HtmlTree {
             Self::Element(x) => x.end(),
             Self::Block(x) => x.end(),
             Self::If(x) => x.end(),
+            Self::For(x) => x.end(),
         }
     }
 
@@ -729,6 +771,7 @@ impl Located for HtmlTree {
             Self::Element(x) => x.loc(),
             Self::Block(x) => x.loc(),
             Self::If(x) => x.loc(),
+            Self::For(x) => x.loc(),
         }
     }
 }
@@ -761,37 +804,40 @@ impl Located for HtmlElement {
 
 impl Located for HtmlFragment {
     fn start(&self) -> LineColumn {
-        self.lt_token.span.start()
+        self.lt_token.start()
     }
     fn end(&self) -> LineColumn {
-        self.closing_gt_token.span.end()
+        self.closing_gt_token.end()
     }
 }
 
 impl Located for HtmlDynamicElement {
     fn start(&self) -> LineColumn {
-        self.lt_token.span.start()
+        self.lt_token.start()
     }
+
     fn end(&self) -> LineColumn {
-        self.closing_gt_token.span.end()
+        self.closing_gt_token.end()
     }
 }
 
 impl Located for HtmlLiteralElement {
     fn start(&self) -> LineColumn {
-        self.lt_token.span.start()
+        self.lt_token.start()
     }
+
     fn end(&self) -> LineColumn {
-        self.closing_gt_token.span.end()
+        self.closing_gt_token.end()
     }
 }
 
 impl Located for HtmlBlock {
     fn start(&self) -> LineColumn {
-        self.brace.span.open().start()
+        self.brace.span.start()
     }
+
     fn end(&self) -> LineColumn {
-        self.brace.span.close().end()
+        self.brace.span.end()
     }
 }
 
@@ -824,8 +870,9 @@ impl Located for HtmlIf {
     fn start(&self) -> LineColumn {
         self.if_token.span.start()
     }
+
     fn end(&self) -> LineColumn {
-        self.else_branch.as_ref().map_or_else(|| self.brace.span.close().end(), Located::end)
+        self.else_branch.as_ref().map_or_else(|| self.brace.span.end(), Located::end)
     }
 }
 
@@ -842,17 +889,27 @@ impl Located for HtmlElse {
     fn end(&self) -> LineColumn {
         match self {
             Self::If(_, r#if) => r#if.end(),
-            Self::Tree(_, brace, _) => brace.span.close().end(),
+            Self::Tree(_, brace, _) => brace.span.end(),
         }
     }
 
     fn loc(&self) -> Location {
         match self {
-            Self::If(r#else, r#if) => Location { start: r#else.span.start(), end: r#if.end() },
+            Self::If(r#else, r#if) => Location { start: r#else.start(), end: r#if.end() },
             Self::Tree(r#else, brace, _) => {
-                Location { start: r#else.span.start(), end: brace.span.close().end() }
+                Location { start: r#else.span.start(), end: brace.span.end() }
             }
         }
+    }
+}
+
+impl Located for HtmlFor {
+    fn start(&self) -> LineColumn {
+        self.for_token.span.start()
+    }
+
+    fn end(&self) -> LineColumn {
+        self.brace.span.end()
     }
 }
 

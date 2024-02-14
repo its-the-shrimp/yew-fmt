@@ -13,6 +13,7 @@ fn Comp() -> Html {
 </code>
 </div>
 if true { { "true" } } else {{"false"}}
+for i in 0 .. 10 {{i}}
 </>
     }
 }

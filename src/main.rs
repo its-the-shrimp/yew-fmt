@@ -1,5 +1,3 @@
-#![allow(clippy::unit_arg)]
-
 mod config;
 mod formatter;
 mod html;
@@ -67,7 +65,7 @@ fn print_diff_for_file(
     let patch = create_patch(src, new_text);
 
     let mut color_spec = ColorSpec::new();
-    Ok(for hunk in patch.hunks() {
+    for hunk in patch.hunks() {
         writeln!(out, "Diff in {file} at line {}:", hunk.old_range().start())
             .context("failed to write a diff header")?;
         for line in hunk.lines() {
@@ -84,7 +82,8 @@ fn print_diff_for_file(
             }
         }
         out.reset().context("failed to reset diff buffer's color")?;
-    })
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

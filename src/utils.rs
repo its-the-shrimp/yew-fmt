@@ -35,6 +35,7 @@ impl StrExt for str {
 
 pub trait OptionExt<T> {
     fn choose<U>(&self, on_true: U, on_false: U) -> U;
+    fn try_map_or<U, E>(self, default: U, f: impl FnOnce(T) -> Result<U, E>) -> Result<U, E>;
 }
 
 impl<T> OptionExt<T> for Option<T> {
@@ -43,6 +44,13 @@ impl<T> OptionExt<T> for Option<T> {
             on_some
         } else {
             on_none
+        }
+    }
+
+    fn try_map_or<U, E>(self, default: U, f: impl FnOnce(T) -> Result<U, E>) -> Result<U, E> {
+        match self {
+            Some(x) => f(x),
+            None => Ok(default),
         }
     }
 }
@@ -107,14 +115,15 @@ pub fn write_with_backup(filename: &str, new_text: impl AsRef<[u8]>) -> Result<(
         File::options().read(true).write(true).open(filename).context("failed to open the file")?;
     let mut old_text = vec![];
     file.read_to_end(&mut old_text).context("failed to read the file")?;
-    Ok(if &*old_text != new_text {
+    if &*old_text != new_text {
         let backup = Path::new(filename).with_extension("bk");
         write(&backup, old_text)
             .with_context(|| format!("failed to create a backup file {:?}", backup.as_os_str()))?;
         file.rewind().context("failed to rewind the file handle")?;
         file.set_len(0).context("failed to clear the file")?;
         file.write_all(new_text).context("failed to write new data to the file")?;
-    })
+    }
+    Ok(())
 }
 
 /// like `fs::read`, but allows for reusing allocations

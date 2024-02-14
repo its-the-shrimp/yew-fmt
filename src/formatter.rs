@@ -146,6 +146,23 @@ impl Located for Location {
 
 pub trait Format<'src> {
     fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()>;
+    /// equivalent to:
+    /// ```rust,ignore
+    /// block.add_space(ctx, self.start())?;
+    /// self.format(block, ctx)?;
+    /// ```
+    /// but does so more concisely
+    fn format_with_space(
+        &self,
+        block: &mut FmtBlock<'_, 'src>,
+        ctx: &mut FormatCtx<'_, 'src>,
+    ) -> Result<()>
+    where
+        Self: Located,
+    {
+        block.add_space(ctx, self.start())?;
+        self.format(block, ctx)
+    }
 }
 
 /// Stores the config and allocated memory to reuse it between reformatting
@@ -272,9 +289,10 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             }
         }
 
-        Ok(if comment_added && self.spacing.map_or(false, |s| s.between) {
+        if comment_added && self.spacing.map_or(false, |s| s.between) {
             sep(self);
-        })
+        }
+        Ok(())
     }
 
     pub fn add_comments(&mut self, ctx: &FormatCtx<'_, 'src>, until: LineColumn) -> Result<()> {
@@ -294,7 +312,8 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     ) -> Result<()> {
         self.add_comments(ctx, at)?;
         self.add_raw_text(text);
-        Ok(self.cur_offset += text.len())
+        self.cur_offset += text.len();
+        Ok(())
     }
 
     fn add_raw_sep(&mut self) {
@@ -328,9 +347,64 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         res
     }
 
-    pub fn add_source(&mut self, ctx: &FormatCtx<'_, 'src>, loc: Location) -> Result<()> {
+    /// same as `add_block` but also:
+    /// - adds the delimiters at the provided source locations;
+    /// - adds trailing comments before the closing delimiter to the new block
+    pub fn add_delimited_block<R>(
+        &mut self,
+        ctx: &mut FormatCtx<'_, 'src>,
+        opening: impl Located,
+        closing: impl Located,
+        spacing: Option<Spacing>,
+        chaining: ChainingRule,
+        f: impl FnOnce(&mut Self, &mut FormatCtx<'_, 'src>) -> Result<R>,
+    ) -> Result<R> {
+        let closing = closing.loc();
+        self.add_source(ctx, opening)?;
+        let res = self.add_block(spacing, chaining, |block| {
+            let res = f(block, ctx)?;
+            block.add_comments(ctx, closing.start)?;
+            anyhow::Ok(res)
+        })?;
+        self.add_source(ctx, closing).map(|_| res)
+    }
+
+    /// - adds a space to the current block before the opening delimiter
+    pub fn add_delimited_block_with_space<R>(
+        &mut self,
+        ctx: &mut FormatCtx<'_, 'src>,
+        opening: impl Located,
+        closing: impl Located,
+        spacing: Option<Spacing>,
+        chaining: ChainingRule,
+        f: impl FnOnce(&mut Self, &mut FormatCtx<'_, 'src>) -> Result<R>,
+    ) -> Result<R> {
+        let opening = opening.loc();
+        self.add_space(ctx, opening.start)?;
+        self.add_delimited_block(ctx, opening, closing, spacing, chaining, f)
+    }
+
+    pub fn add_source(&mut self, ctx: &FormatCtx<'_, 'src>, at: impl Located) -> Result<()> {
+        let loc = at.loc();
         let text = ctx.source_code(loc).context("failed to get a token's source code")?;
         self.add_text(text, ctx, loc.start)
+    }
+
+    /// equivalent to:
+    /// ```rust,ignore
+    /// let loc = ...;
+    /// block.add_space(ctx, loc.start())?;
+    /// block.add_source(ctx, loc)?;
+    /// ```
+    /// but does so more concisely
+    pub fn add_source_with_space(
+        &mut self,
+        ctx: &FormatCtx<'_, 'src>,
+        at: impl Located,
+    ) -> Result<()> {
+        let loc = at.loc();
+        self.add_space(ctx, loc.start)?;
+        self.add_source(ctx, loc)
     }
 
     pub fn add_source_iter(
@@ -338,9 +412,10 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         ctx: &FormatCtx<'_, 'src>,
         iter: impl IntoIterator<Item = impl Located>,
     ) -> Result<()> {
-        Ok(for obj in iter {
-            self.add_source(ctx, obj.loc())?;
-        })
+        for obj in iter {
+            self.add_source(ctx, obj)?;
+        }
+        Ok(())
     }
 
     pub fn add_source_punctuated(
@@ -348,12 +423,13 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         ctx: &FormatCtx<'_, 'src>,
         iter: &Punctuated<impl Located, impl Located>,
     ) -> Result<()> {
-        Ok(for pair in iter.pairs() {
+        for pair in iter.pairs() {
             self.add_source(ctx, pair.value().loc())?;
             if let Some(punct) = pair.punct() {
                 self.add_source(ctx, punct.loc())?;
             }
-        })
+        }
+        Ok(())
     }
 
     fn force_breaking(&mut self, ctx: &FormatCtx<'_, 'src>, indent: usize) {
@@ -733,7 +809,8 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
         })?;
         self.cur_offset = until_byte;
         self.cur_pos = until;
-        Ok(self.output.push_str(new))
+        self.output.push_str(new);
+        Ok(())
     }
 
     // `end` is the position in the source file asssumed to be the end of the text
@@ -741,7 +818,8 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
         self.output.push_str(text);
         self.cur_pos = end;
         let off = self.pos_to_byte_offset(end)?;
-        Ok(self.cur_offset = off)
+        self.cur_offset = off;
+        Ok(())
     }
 
     // `end` is the position in the source file asssumed to be the end of the formatted sequence
@@ -752,7 +830,8 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
         block.print(indent, self.config, self.output);
         self.cur_pos = end;
         let off = self.pos_to_byte_offset(end)?;
-        Ok(self.cur_offset = off)
+        self.cur_offset = off;
+        Ok(())
     }
 
     fn finalise(self) -> Result<FormatResult<'fmt, 'src>> {

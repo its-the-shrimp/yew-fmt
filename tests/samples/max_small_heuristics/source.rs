@@ -14,5 +14,6 @@ fn Comp() -> Html {
 </div>
 if true { { "true" } } else {{"false"}}
 </>
-    }
+    };
+html!(for i in 0 .. 10 {{i}})
 }

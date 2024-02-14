@@ -16,6 +16,9 @@ fn Comp() -> Html {
             } else {
                 { "false" }
             }
+            for i in 0 .. 10 {
+                { i }
+            }
         </>
     }
 }
