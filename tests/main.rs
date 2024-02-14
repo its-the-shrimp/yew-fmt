@@ -4,33 +4,33 @@ mod common;
 use common::cmp;
 
 #[test]
-fn issue_10() {
-    cmp("tests/samples/issue_10")
-}
-
-#[test]
 fn breaking_propagated() {
     cmp("tests/samples/breaking_propagated")
 }
 
 #[test]
-fn issue_2() {
-    cmp("tests/samples/issue_2")
+fn elements_broken_up() {
+    cmp("tests/samples/elements_broken_up")
 }
 
 #[test]
-fn issue_5() {
-    cmp("tests/samples/issue_5")
+fn html_for() {
+    cmp("tests/samples/html_for")
 }
 
 #[test]
-fn issue_3() {
-    cmp("tests/samples/issue_3")
+fn issue_1() {
+    cmp("tests/samples/issue_1")
 }
 
 #[test]
-fn no_small_heuristics() {
-    cmp("tests/samples/no_small_heuristics")
+fn issue_10() {
+    cmp("tests/samples/issue_10")
+}
+
+#[test]
+fn issue_12() {
+    cmp("tests/samples/issue_12")
 }
 
 #[test]
@@ -44,23 +44,18 @@ fn issue_14() {
 }
 
 #[test]
-fn max_small_heuristics() {
-    cmp("tests/samples/max_small_heuristics")
+fn issue_2() {
+    cmp("tests/samples/issue_2")
 }
 
 #[test]
-fn html_for() {
-    cmp("tests/samples/html_for")
+fn issue_3() {
+    cmp("tests/samples/issue_3")
 }
 
 #[test]
-fn issue_12() {
-    cmp("tests/samples/issue_12")
-}
-
-#[test]
-fn elements_broken_up() {
-    cmp("tests/samples/elements_broken_up")
+fn issue_5() {
+    cmp("tests/samples/issue_5")
 }
 
 #[test]
@@ -69,8 +64,8 @@ fn issue_6() {
 }
 
 #[test]
-fn issue_1() {
-    cmp("tests/samples/issue_1")
+fn issue_7() {
+    cmp("tests/samples/issue_7")
 }
 
 #[test]
@@ -84,7 +79,11 @@ fn issue_9() {
 }
 
 #[test]
-fn issue_7() {
-    cmp("tests/samples/issue_7")
+fn max_small_heuristics() {
+    cmp("tests/samples/max_small_heuristics")
 }
 
+#[test]
+fn no_small_heuristics() {
+    cmp("tests/samples/no_small_heuristics")
+}
