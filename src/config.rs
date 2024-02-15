@@ -1,5 +1,5 @@
-use crate::utils::StrExt;
-use anyhow::{anyhow, bail, Context, Result};
+use crate::utils::{Result, StrExt};
+use anyhow::{anyhow, bail, Context};
 use dirs::{config_dir, home_dir};
 use serde::{Deserialize, Deserializer};
 use std::{

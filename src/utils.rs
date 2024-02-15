@@ -1,4 +1,5 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Context};
+use proc_macro2::TokenTree;
 use std::{
     fs::{write, File},
     io::{self, Read, Seek, Write},
@@ -6,6 +7,9 @@ use std::{
     path::Path,
     str::FromStr,
 };
+use syn::buffer::Cursor;
+
+pub type Result<T = (), E = anyhow::Error> = std::result::Result<T, E>;
 
 pub trait StrExt {
     /// Returns the length of the last line of the string, or `None` if the string is 1 line.
@@ -108,8 +112,30 @@ impl<T> SliceExt<T> for [T] {
     }
 }
 
+pub struct TokenIter<'cursor>(pub Cursor<'cursor>);
+
+impl Iterator for TokenIter<'_> {
+    type Item = TokenTree;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (token, new_cursor) = self.0.token_tree()?;
+        self.0 = new_cursor;
+        Some(token)
+    }
+}
+
+pub trait TokenTreeExt {
+    fn is_ident(&self, ident: &str) -> bool;
+}
+
+impl TokenTreeExt for TokenTree {
+    fn is_ident(&self, ident: &str) -> bool {
+        matches!(self, TokenTree::Ident(i) if i == ident)
+    }
+}
+
 /// like `std::fs::write`, but will also create a `.bk` file
-pub fn write_with_backup(filename: &str, new_text: impl AsRef<[u8]>) -> Result<()> {
+pub fn write_with_backup(filename: &str, new_text: impl AsRef<[u8]>) -> Result {
     let new_text = new_text.as_ref();
     let mut file =
         File::options().read(true).write(true).open(filename).context("failed to open the file")?;

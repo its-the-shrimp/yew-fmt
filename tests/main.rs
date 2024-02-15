@@ -14,8 +14,18 @@ fn elements_broken_up() {
 }
 
 #[test]
+fn for_block() {
+    cmp("tests/samples/for_block")
+}
+
+#[test]
 fn html_for() {
     cmp("tests/samples/html_for")
+}
+
+#[test]
+fn html_match() {
+    cmp("tests/samples/html_match")
 }
 
 #[test]

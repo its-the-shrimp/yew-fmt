@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::html::*;
-use crate::utils::{default, SliceExt, StrExt};
-use anyhow::{bail, Context, Result};
+use crate::utils::{default, Result, SliceExt, StrExt};
+use anyhow::{bail, Context};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
@@ -9,6 +9,7 @@ use codespan_reporting::files::SimpleFile;
 use codespan_reporting::term;
 use codespan_reporting::term::termcolor::WriteColor;
 use proc_macro2::LineColumn;
+use std::cmp::min;
 use std::mem::{replace, take};
 use std::vec::Vec as StdVec;
 use syn::punctuated::Punctuated;
@@ -19,11 +20,13 @@ fn is_skipped(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|attr| attr.path().segments.iter().map(|x| &x.ident).eq(["rustfmt", "skip"]))
 }
 
-fn print_break(out: &mut String, indent: usize) {
+fn print_break(out: &mut String, n_newlines: u8, indent: usize) {
     out.reserve(indent + 1);
-    out.push('\n');
+    for _ in 0..n_newlines {
+        out.push('\n')
+    }
     for _ in 0..indent {
-        out.push(' ');
+        out.push(' ')
     }
 }
 
@@ -145,7 +148,7 @@ impl Located for Location {
 }
 
 pub trait Format<'src> {
-    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result<()>;
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result;
     /// equivalent to:
     /// ```rust,ignore
     /// block.add_space(ctx, self.start())?;
@@ -156,7 +159,7 @@ pub trait Format<'src> {
         &self,
         block: &mut FmtBlock<'_, 'src>,
         ctx: &mut FormatCtx<'_, 'src>,
-    ) -> Result<()>
+    ) -> Result
     where
         Self: Located,
     {
@@ -182,7 +185,9 @@ enum FmtToken<'fmt, 'src> {
     Text(&'src str),
     /// needs special handling of the newline
     LineComment(&'src str),
-    Sep,
+    /// The contained integer is the number of newlines to be put if the parent block is broken up.
+    /// Added for compatibility with rustfmt's formatting of match expressions
+    Sep(u8),
     Block(FmtBlock<'fmt, 'src>),
 }
 
@@ -269,7 +274,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         ctx: &FormatCtx<'_, 'src>,
         until: LineColumn,
         mut sep: impl FnMut(&mut Self),
-    ) -> Result<()> {
+    ) -> Result {
         let until = ctx.pos_to_byte_offset(until)?;
         let range = self.cur_offset..until;
         let comment = ctx
@@ -295,35 +300,57 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         Ok(())
     }
 
-    pub fn add_comments(&mut self, ctx: &FormatCtx<'_, 'src>, until: LineColumn) -> Result<()> {
+    pub fn add_comments(&mut self, ctx: &FormatCtx<'_, 'src>, until: LineColumn) -> Result {
         self.add_comments_with_sep(ctx, until, Self::add_raw_space)
     }
 
-    pub fn add_space(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result<()> {
+    pub fn add_space(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result {
         self.add_raw_space();
         self.add_comments(ctx, at)
     }
 
-    fn add_text(
+    pub fn add_text(
         &mut self,
-        text: &'src str,
         ctx: &FormatCtx<'_, 'src>,
+        text: &'src str,
         at: LineColumn,
-    ) -> Result<()> {
+    ) -> Result {
         self.add_comments(ctx, at)?;
         self.add_raw_text(text);
         self.cur_offset += text.len();
         Ok(())
     }
 
-    fn add_raw_sep(&mut self) {
-        self.tokens.push(FmtToken::Sep);
+    fn add_raw_sep(&mut self, n_newlines: u8) {
+        self.tokens.push(FmtToken::Sep(n_newlines));
         self.width += self.spacing.map_or(false, |s| s.between) as usize;
     }
 
-    pub fn add_sep(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result<()> {
-        self.add_raw_sep();
-        self.add_comments_with_sep(ctx, at, Self::add_raw_sep)
+    pub fn add_sep(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result {
+        self.add_raw_sep(1);
+        self.add_comments_with_sep(ctx, at, |b| b.add_raw_sep(1))
+    }
+
+    /// Scans the source code from `at` until the first non-whitespace character, counts the number
+    /// of newlines in that interval, confines that to `max_newlines` and adds a separator with
+    /// that number of newlines.
+    pub fn add_aware_sep(
+        &mut self,
+        ctx: &FormatCtx<'_, 'src>,
+        at: LineColumn,
+        max_newlines: u8,
+    ) -> Result {
+        let start = ctx.pos_to_byte_offset(at)?;
+        let n_newlines = ctx
+            .input
+            .get(start..)
+            .with_context(|| format!("invalid byte offset: {start}"))?
+            .chars()
+            .take_while(char::is_ascii_whitespace)
+            .filter(|&c| c == '\n')
+            .count();
+        self.add_raw_sep(min(max_newlines, n_newlines.try_into()?));
+        self.add_comments_with_sep(ctx, at, |b| b.add_raw_sep(1))
     }
 
     /// adds a block and gives a mutable reference to it to `f`
@@ -335,7 +362,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     ) -> R {
         let mut block = Self::new(self.tokens.bump(), spacing, chaining, self.cur_offset);
         let res = f(&mut block);
-        if matches!(block.tokens.last(), Some(FmtToken::Sep)) {
+        if matches!(block.tokens.last(), Some(FmtToken::Sep(_))) {
             block.tokens.pop();
         }
         match spacing {
@@ -384,10 +411,10 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         self.add_delimited_block(ctx, opening, closing, spacing, chaining, f)
     }
 
-    pub fn add_source(&mut self, ctx: &FormatCtx<'_, 'src>, at: impl Located) -> Result<()> {
+    pub fn add_source(&mut self, ctx: &FormatCtx<'_, 'src>, at: impl Located) -> Result {
         let loc = at.loc();
         let text = ctx.source_code(loc).context("failed to get a token's source code")?;
-        self.add_text(text, ctx, loc.start)
+        self.add_text(ctx, text, loc.start)
     }
 
     /// equivalent to:
@@ -397,11 +424,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     /// block.add_source(ctx, loc)?;
     /// ```
     /// but does so more concisely
-    pub fn add_source_with_space(
-        &mut self,
-        ctx: &FormatCtx<'_, 'src>,
-        at: impl Located,
-    ) -> Result<()> {
+    pub fn add_source_with_space(&mut self, ctx: &FormatCtx<'_, 'src>, at: impl Located) -> Result {
         let loc = at.loc();
         self.add_space(ctx, loc.start)?;
         self.add_source(ctx, loc)
@@ -411,7 +434,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         &mut self,
         ctx: &FormatCtx<'_, 'src>,
         iter: impl IntoIterator<Item = impl Located>,
-    ) -> Result<()> {
+    ) -> Result {
         for obj in iter {
             self.add_source(ctx, obj)?;
         }
@@ -422,7 +445,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         &mut self,
         ctx: &FormatCtx<'_, 'src>,
         iter: &Punctuated<impl Located, impl Located>,
-    ) -> Result<()> {
+    ) -> Result {
         for pair in iter.pairs() {
             self.add_source(ctx, pair.value().loc())?;
             if let Some(punct) = pair.punct() {
@@ -442,8 +465,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         while let Some((token, prev_tokens)) = tokens_iter.next() {
             match token {
                 FmtToken::Text(text) => offset = add_last_line_len(offset, text),
-                FmtToken::LineComment(comment) => offset += comment.len() + 4,
-                FmtToken::Sep => offset = 0,
+                FmtToken::Sep(_) | FmtToken::LineComment(_) => offset = 0,
                 FmtToken::Block(block) => {
                     if chain_broken {
                         block.force_breaking(ctx, indent);
@@ -472,7 +494,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
                     match token {
                         FmtToken::Text(text) => offset = add_last_line_len(offset, text),
                         FmtToken::LineComment(comment) => offset += comment.len() + 4,
-                        FmtToken::Sep => break,
+                        FmtToken::Sep(_) => break,
                         FmtToken::Block(block) => {
                             if take(&mut first) {
                                 chain_broken = block.chaining_rule.is_on();
@@ -538,17 +560,17 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
                     if let Sep::Newline = sep {
                         out.push_str("//");
                         out.push_str(comment);
-                        print_break(out, indent)
+                        print_break(out, 1, indent)
                     } else {
                         out.push_str("/*");
                         out.push_str(comment);
                         out.push_str("*/")
                     }
                 }
-                FmtToken::Sep => match sep {
+                FmtToken::Sep(n_newlines) => match sep {
                     Sep::None => (),
                     Sep::Space => out.push(' '),
-                    Sep::Newline => print_break(out, indent),
+                    Sep::Newline => print_break(out, *n_newlines, indent),
                 },
                 FmtToken::Block(block) => block.print(indent, cfg, out),
             }
@@ -570,14 +592,14 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             }
         } else {
             let new_indent = indent + cfg.tab_spaces;
-            print_break(out, new_indent);
+            print_break(out, 1, new_indent);
             for token in &self.tokens {
                 print_token(token, new_indent, Sep::Newline, cfg, out);
             }
             if let Some(FmtToken::LineComment(_)) = self.tokens.last() {
                 out.truncate(out.len() - 4)
             } else {
-                print_break(out, indent)
+                print_break(out, 1, indent)
             }
         }
     }
@@ -801,7 +823,7 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
         bail!("line {line} of the source file is empty")
     }
 
-    fn print_source(&mut self, until: LineColumn) -> Result<()> {
+    fn print_source(&mut self, until: LineColumn) -> Result {
         let until_byte = self.pos_to_byte_offset(until)?;
         let from = self.cur_offset;
         let new = self.input.get(from..until_byte).with_context(|| {
@@ -814,7 +836,7 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     }
 
     // `end` is the position in the source file asssumed to be the end of the text
-    fn print_text(&mut self, text: &str, end: LineColumn) -> Result<()> {
+    fn print_text(&mut self, text: &str, end: LineColumn) -> Result {
         self.output.push_str(text);
         self.cur_pos = end;
         let off = self.pos_to_byte_offset(end)?;
@@ -823,10 +845,9 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     }
 
     // `end` is the position in the source file asssumed to be the end of the formatted sequence
-    fn print_fmt_block(&mut self, mut block: FmtBlock<'fmt, 'src>, end: LineColumn) -> Result<()> {
+    fn print_fmt_block(&mut self, mut block: FmtBlock<'fmt, 'src>, end: LineColumn) -> Result {
         let indent = self.line_indent(self.cur_pos.line)?;
         block.determine_breaking(self, self.cur_pos.column - indent, indent);
-        //panic!("{block:#?}");
         block.print(indent, self.config, self.output);
         self.cur_pos = end;
         let off = self.pos_to_byte_offset(end)?;

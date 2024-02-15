@@ -3,7 +3,7 @@ mod formatter;
 mod html;
 mod utils;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use clap::{ColorChoice as ColorWhen, Parser, ValueEnum};
 use codespan_reporting::term::termcolor::{
     BufferWriter, Color, ColorChoice, ColorSpec, StandardStream, WriteColor,
@@ -19,7 +19,7 @@ use std::{
     process::{Command, ExitCode, Stdio},
     str::from_utf8,
 };
-use utils::{read_into, write_with_backup, KVPairs};
+use utils::{read_into, write_with_backup, KVPairs, Result};
 
 fn parse_rustfmt_output<'src>(src: &'src str) -> Result<HashMap<&'src str, &'src str>> {
     fn path_like(src: &str) -> bool {
@@ -59,7 +59,7 @@ fn print_diff_for_file(
     out: &mut impl WriteColor,
     file: &str,
     new_text: &str,
-) -> Result<()> {
+) -> Result {
     read_into(file, buf).context("failed to read contents of the source file")?;
     let src = from_utf8(buf).context("the source file is not UTF-8")?;
     let patch = create_patch(src, new_text);

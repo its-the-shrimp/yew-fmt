@@ -7,9 +7,8 @@ fn main() -> anyhow::Result<()> {
     let mut test_suite = BufWriter::new(File::create("tests/main.rs")?);
     writeln!(test_suite, "//! Auto-generated from build.rs\n\nmod common;\nuse common::cmp;")?;
 
-    let mut tests = read_dir("tests/samples")?
-        .map(|e| e.map(|e| e.path()))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut tests =
+        read_dir("tests/samples")?.map(|e| e.map(|e| e.path())).collect::<Result<Vec<_>, _>>()?;
     tests.sort();
     for path in tests {
         let name = path.file_name().context("no filename")?.to_str().context("invalid filename")?;
