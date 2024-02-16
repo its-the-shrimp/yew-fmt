@@ -1,3 +1,4 @@
+// config: yew.ext=true
 use yew::prelude::*;
 
 #[function_component]

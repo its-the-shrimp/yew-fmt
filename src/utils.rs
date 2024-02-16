@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use proc_macro2::TokenTree;
+use proc_macro2::{TokenStream, TokenTree};
 use std::{
     fs::{write, File},
     io::{self, Read, Seek, Write},
@@ -7,7 +7,11 @@ use std::{
     path::Path,
     str::FromStr,
 };
-use syn::buffer::Cursor;
+use syn::{
+    buffer::Cursor,
+    parse::{Parse, ParseBuffer, ParseStream, Parser},
+    punctuated::Punctuated,
+};
 
 pub type Result<T = (), E = anyhow::Error> = std::result::Result<T, E>;
 
@@ -132,6 +136,69 @@ impl TokenTreeExt for TokenTree {
     fn is_ident(&self, ident: &str) -> bool {
         matches!(self, TokenTree::Ident(i) if i == ident)
     }
+}
+
+pub trait ParseWithCtx: Sized {
+    type Context;
+
+    fn parse(input: ParseStream, ctx: Self::Context) -> syn::Result<Self>;
+}
+
+impl<T: ParseWithCtx> ParseWithCtx for Box<T> {
+    type Context = T::Context;
+
+    fn parse(input: ParseStream, ctx: Self::Context) -> syn::Result<Self> {
+        T::parse(input, ctx).map(Box::new)
+    }
+}
+
+pub trait ParseBufferExt {
+    fn parse_with_ctx<T: ParseWithCtx>(&self, ctx: T::Context) -> syn::Result<T>;
+}
+
+impl<'buf> ParseBufferExt for ParseBuffer<'buf> {
+    fn parse_with_ctx<T: ParseWithCtx>(&self, ctx: T::Context) -> syn::Result<T> {
+        T::parse(self, ctx)
+    }
+}
+
+pub trait PunctuatedExt<T>
+where
+    Self: Sized,
+    T: ParseWithCtx,
+    T::Context: Copy,
+{
+    fn parse_terminated_with_ctx(input: ParseStream, ctx: T::Context) -> syn::Result<Self>;
+}
+
+impl<T, P> PunctuatedExt<T> for Punctuated<T, P>
+where
+    T: ParseWithCtx,
+    T::Context: Copy,
+    P: Parse,
+{
+    fn parse_terminated_with_ctx(input: ParseStream, ctx: T::Context) -> syn::Result<Self> {
+        let mut punctuated = Punctuated::new();
+
+        loop {
+            if input.is_empty() {
+                break;
+            }
+            let value = input.parse_with_ctx(ctx)?;
+            punctuated.push_value(value);
+            if input.is_empty() {
+                break;
+            }
+            let punct = input.parse()?;
+            punctuated.push_punct(punct);
+        }
+
+        Ok(punctuated)
+    }
+}
+
+pub fn parse2_with_ctx<T: ParseWithCtx>(stream: TokenStream, ctx: T::Context) -> syn::Result<T> {
+    (|input: ParseStream| T::parse(input, ctx)).parse2(stream)
 }
 
 /// like `std::fs::write`, but will also create a `.bk` file

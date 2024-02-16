@@ -1,7 +1,10 @@
 use crate::{
     config::UseSmallHeuristics,
     formatter::{ChainingRule, FmtBlock, Format, FormatCtx, Located, Location, Spacing},
-    utils::{default, OptionExt, Result, TokenIter, TokenTreeExt},
+    utils::{
+        default, OptionExt, ParseBufferExt, ParseWithCtx, PunctuatedExt, Result, TokenIter,
+        TokenTreeExt,
+    },
 };
 use anyhow::Context;
 use proc_macro2::{Delimiter, LineColumn, TokenStream, TokenTree};
@@ -162,33 +165,43 @@ pub struct HtmlMatchArm {
     pub body: Html,
 }
 
-impl Parse for Html {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
+impl ParseWithCtx for Html {
+    type Context = bool;
+
+    fn parse(input: ParseStream, ext: bool) -> syn::Result<Self> {
         let cursor = input.cursor();
         Ok(match HtmlTree::peek_html_type(cursor) {
-            Some(HtmlTreeKind::For) if TokenIter(cursor).any(|t| t.is_ident("in")) => {
-                Self::Tree(HtmlTree::For(input.parse()?))
+            Some(HtmlTreeKind::For) if ext && TokenIter(cursor).any(|t| t.is_ident("in")) => {
+                Self::Tree(HtmlTree::For(input.parse_with_ctx(ext)?))
             }
-            Some(HtmlTreeKind::If) => Self::Tree(HtmlTree::If(input.parse()?)),
+            Some(HtmlTreeKind::Match) if ext => {
+                Self::Tree(HtmlTree::Match(input.parse_with_ctx(ext)?))
+            }
+            // TODO: more descriptive error msg with a link to the docs
+            Some(HtmlTreeKind::Match) => return Err(input.error("unexpected token")),
+            Some(HtmlTreeKind::If) => Self::Tree(HtmlTree::If(input.parse_with_ctx(ext)?)),
             Some(HtmlTreeKind::Block) => Self::Tree(HtmlTree::Block(input.parse()?)),
-            Some(HtmlTreeKind::Match) => Self::Tree(HtmlTree::Match(input.parse()?)),
-            Some(HtmlTreeKind::Element) => Self::Tree(HtmlTree::Element(input.parse()?)),
+            Some(HtmlTreeKind::Element) => {
+                Self::Tree(HtmlTree::Element(input.parse_with_ctx(ext)?))
+            }
             Some(HtmlTreeKind::For) | None => Self::Value(input.parse()?),
         })
     }
 }
 
-impl Parse for HtmlTree {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
+impl ParseWithCtx for HtmlTree {
+    type Context = bool;
+
+    fn parse(input: ParseStream, ext: bool) -> syn::Result<Self> {
         let cursor = input.cursor();
         Ok(if HtmlIf::parseable(cursor) {
-            Self::If(input.parse()?)
-        } else if HtmlFor::parseable(cursor) {
-            Self::For(input.parse()?)
-        } else if HtmlMatch::parseable(cursor) {
-            Self::Match(input.parse()?)
+            Self::If(input.parse_with_ctx(ext)?)
         } else if HtmlElement::parseable(cursor) {
-            Self::Element(input.parse()?)
+            Self::Element(input.parse_with_ctx(ext)?)
+        } else if ext && HtmlFor::parseable(cursor) {
+            Self::For(input.parse_with_ctx(ext)?)
+        } else if ext && HtmlMatch::parseable(cursor) {
+            Self::Match(input.parse_with_ctx(ext)?)
         } else {
             Self::Block(input.parse()?)
         })
@@ -225,14 +238,16 @@ impl HtmlElement {
     }
 }
 
-impl Parse for HtmlElement {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
+impl ParseWithCtx for HtmlElement {
+    type Context = bool;
+
+    fn parse(input: ParseStream, ext: bool) -> syn::Result<Self> {
         Ok(if HtmlFragment::parseable(input.cursor()) {
-            Self::Fragment(input.parse()?)
+            Self::Fragment(input.parse_with_ctx(ext)?)
         } else if HtmlDynamicElement::parseable(input.cursor()) {
-            Self::Dynamic(input.parse()?)
+            Self::Dynamic(input.parse_with_ctx(ext)?)
         } else {
-            Self::Literal(input.parse()?)
+            Self::Literal(input.parse_with_ctx(ext)?)
         })
     }
 }
@@ -250,8 +265,10 @@ impl HtmlFragment {
     }
 }
 
-impl Parse for HtmlFragment {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
+impl ParseWithCtx for HtmlFragment {
+    type Context = bool;
+
+    fn parse(input: ParseStream, ext: bool) -> syn::Result<Self> {
         let lt_token = input.parse()?;
         let (key, gt_token) = if input.peek(Token![>]) {
             (None, input.parse()?)
@@ -263,7 +280,7 @@ impl Parse for HtmlFragment {
             lt_token,
             key,
             gt_token,
-            children: HtmlTree::parse_children(input)?,
+            children: HtmlTree::parse_children(input, ext)?,
             closing_lt_token: input.parse()?,
             div_token: input.parse()?,
             closing_gt_token: input.parse()?,
@@ -271,8 +288,10 @@ impl Parse for HtmlFragment {
     }
 }
 
-impl Parse for HtmlDynamicElement {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
+impl ParseWithCtx for HtmlDynamicElement {
+    type Context = bool;
+
+    fn parse(input: ParseStream, ext: bool) -> syn::Result<Self> {
         let lt_token = input.parse()?;
         let at_token = input.parse()?;
         let name = input.parse()?;
@@ -284,7 +303,7 @@ impl Parse for HtmlDynamicElement {
 
         let (children, closing_tag, div_token) = if input.peek(Token![>]) {
             let gt_token = input.parse()?;
-            let children = HtmlTree::parse_children(input)?;
+            let children = HtmlTree::parse_children(input, ext)?;
             let closing_lt_token = input.parse()?;
             let div_token = input.parse()?;
             let closing_at_token = input.parse()?;
@@ -306,8 +325,10 @@ impl Parse for HtmlDynamicElement {
     }
 }
 
-impl Parse for HtmlLiteralElement {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
+impl ParseWithCtx for HtmlLiteralElement {
+    type Context = bool;
+
+    fn parse(input: ParseStream, ext: bool) -> syn::Result<Self> {
         fn prop_base_collector(input: ParseStream) -> impl Iterator<Item = TokenTree> + '_ {
             from_fn(move || {
                 (!input.peek(Token![>]) && !input.peek(Token![/])).then(|| input.parse().ok())?
@@ -338,7 +359,7 @@ impl Parse for HtmlLiteralElement {
 
         let (children, closing_tag, div_token) = if input.peek(Token![>]) {
             let gt_token = input.parse()?;
-            let children = HtmlTree::parse_children(input)?;
+            let children = HtmlTree::parse_children(input, ext)?;
             let closing_lt_token = input.parse()?;
             let div_token = input.parse()?;
             let closing_name = get_name(input)?;
@@ -387,33 +408,41 @@ impl Parse for BracedExpr {
     }
 }
 
-impl Parse for HtmlIf {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
+impl ParseWithCtx for HtmlIf {
+    type Context = bool;
+
+    fn parse(input: ParseStream, ext: bool) -> syn::Result<Self> {
         let then_block;
         Ok(Self {
             if_token: input.parse()?,
             condition: Expr::parse_without_eager_brace(input)?,
             brace: braced!(then_block in input),
-            then_branch: HtmlTree::parse_children(&then_block)?,
-            else_branch: HtmlElse::parseable(input.cursor()).then(|| input.parse()).transpose()?,
+            then_branch: HtmlTree::parse_children(&then_block, ext)?,
+            else_branch: HtmlElse::parseable(input.cursor())
+                .then(|| input.parse_with_ctx(ext))
+                .transpose()?,
         })
     }
 }
 
-impl Parse for HtmlElse {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
+impl ParseWithCtx for HtmlElse {
+    type Context = bool;
+
+    fn parse(input: ParseStream, ext: bool) -> syn::Result<Self> {
         let else_token = input.parse()?;
         Ok(if HtmlIf::parseable(input.cursor()) {
-            Self::If(else_token, input.parse()?)
+            Self::If(else_token, input.parse_with_ctx(ext)?)
         } else {
             let inner;
-            Self::Tree(else_token, braced!(inner in input), HtmlTree::parse_children(&inner)?)
+            Self::Tree(else_token, braced!(inner in input), HtmlTree::parse_children(&inner, ext)?)
         })
     }
 }
 
-impl Parse for HtmlFor {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
+impl ParseWithCtx for HtmlFor {
+    type Context = bool;
+
+    fn parse(input: ParseStream, ext: bool) -> syn::Result<Self> {
         let body;
         Ok(Self {
             for_token: input.parse()?,
@@ -421,25 +450,29 @@ impl Parse for HtmlFor {
             in_token: input.parse()?,
             iter: Expr::parse_without_eager_brace(input)?,
             brace: braced!(body in input),
-            body: HtmlTree::parse_children(&body)?,
+            body: HtmlTree::parse_children(&body, ext)?,
         })
     }
 }
 
-impl Parse for HtmlMatch {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
+impl ParseWithCtx for HtmlMatch {
+    type Context = bool;
+
+    fn parse(input: ParseStream, ext: bool) -> syn::Result<Self> {
         let body;
         Ok(Self {
             match_token: input.parse()?,
             expr: Expr::parse_without_eager_brace(input)?,
             brace: braced!(body in input),
-            arms: body.parse_terminated(HtmlMatchArm::parse, Token![,])?,
+            arms: Punctuated::parse_terminated_with_ctx(&body, ext)?,
         })
     }
 }
 
-impl Parse for HtmlMatchArm {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
+impl ParseWithCtx for HtmlMatchArm {
+    type Context = bool;
+
+    fn parse(input: ParseStream, ext: bool) -> syn::Result<Self> {
         Ok(Self {
             pat: Pat::parse_multi_with_leading_vert(input)?,
             guard: if let Ok(if_token) = input.parse() {
@@ -448,7 +481,7 @@ impl Parse for HtmlMatchArm {
                 None
             },
             fat_arrow_token: input.parse()?,
-            body: input.parse()?,
+            body: input.parse_with_ctx(ext)?,
         })
     }
 }
@@ -470,10 +503,10 @@ impl HtmlTree {
         }
     }
 
-    fn parse_children(input: ParseStream) -> syn::Result<Vec<Self>> {
+    fn parse_children(input: ParseStream, ext: bool) -> syn::Result<Vec<Self>> {
         let mut res = vec![];
         while !(input.is_empty() || input.peek(Token![<]) && input.peek2(Token![/])) {
-            res.push(input.parse()?)
+            res.push(input.parse_with_ctx(ext)?)
         }
         Ok(res)
     }

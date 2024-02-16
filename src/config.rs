@@ -19,6 +19,7 @@ pub struct YewConfig {
     pub unwrap_literal_prop_values: bool,
     pub use_prop_init_shorthand: bool,
     pub self_close_elements: bool,
+    pub ext: bool,
     pub unknown: HashMap<String, Unknown>,
 }
 
@@ -39,6 +40,7 @@ struct RawConfigYew {
     use_small_heuristics: Option<UseSmallHeuristics>,
     use_prop_init_shorthand: Option<bool>,
     self_close_elements: Option<bool>,
+    ext: Option<bool>,
     #[serde(flatten)]
     unknown: HashMap<String, Unknown>,
 }
@@ -139,7 +141,8 @@ impl Config {
                 yew.use_small_heuristics: UseSmallHeuristics,
                 yew.unwrap_literal_prop_values: bool,
                 yew.use_prop_init_shorthand: bool,
-                yew.self_close_elements: bool
+                yew.self_close_elements: bool,
+                yew.ext: bool
             });
         }
 
@@ -160,6 +163,8 @@ impl Config {
                     .unwrap_or(false),
                 self_close_elements: raw.yew.self_close_elements
                     .unwrap_or(true),
+                ext: raw.yew.ext
+                    .unwrap_or(false),
                 unknown: raw.yew.unknown,
             },
         })

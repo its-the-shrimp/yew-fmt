@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::html::*;
-use crate::utils::{default, Result, SliceExt, StrExt};
+use crate::utils::{default, parse2_with_ctx, Result, SliceExt, StrExt};
 use anyhow::{bail, Context};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -349,8 +349,11 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             .take_while(char::is_ascii_whitespace)
             .filter(|&c| c == '\n')
             .count();
-        self.add_raw_sep(min(max_newlines, n_newlines.try_into()?));
-        self.add_comments_with_sep(ctx, at, |b| b.add_raw_sep(1))
+        if n_newlines > 0 {
+            self.add_raw_sep(min(max_newlines, n_newlines.try_into()?));
+            self.add_comments_with_sep(ctx, at, |b| b.add_raw_sep(1))?;
+        }
+        Ok(())
     }
 
     /// adds a block and gives a mutable reference to it to `f`
@@ -687,7 +690,7 @@ impl<'fmt, 'src: 'fmt> Visit<'_> for FormatCtx<'fmt, 'src> {
                 return Ok(None);
             }
 
-            let html = match syn::parse2::<Html>(i.tokens.clone()) {
+            let html = match parse2_with_ctx::<Html>(i.tokens.clone(), self.config.yew.ext) {
                 Ok(html) => html,
                 Err(e) => {
                     let span = e.span();

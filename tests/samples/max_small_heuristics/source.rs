@@ -1,4 +1,4 @@
-// config: yew.use_small_heuristics="Max"
+// config: yew.use_small_heuristics="Max",yew.ext=true
 
 use
 yew::prelude::*;
