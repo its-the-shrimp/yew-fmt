@@ -127,7 +127,6 @@ The default syntax specified by Yew itself.
 #### `Ext`
 The syntax of `yew-html-ext`.
 
-
 ## Keep in mind, work is still in progress
 As the project is very early on in development, not all CLI options of `rustfmt` are supported,
 yet the eventual target of the project is 100% compatibility, so all the ❌ in the table 

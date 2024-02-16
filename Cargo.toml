@@ -1,29 +1,29 @@
 [package]
 name = "yew-fmt"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 authors = ["Tim Kurdov <tim.kurdov@gmail.com>"]
 repository = "https://github.com/schvv31n/yew-fmt"
 license = "MIT"
-keywords = ["yew", "formatter"]
+keywords = ["yew", "formatter", "rustfmt"]
 categories = ["development-tools"]
 description = "Code formatter for the Yew framework"
 
 [dependencies]
-proc-macro2 = { version = "1.0.69", features = ["span-locations"] }
-syn = { version = "2.0.39", features = ["full", "printing", "visit"] }
-quote = "1.0.33"
-clap = { version = "4.4", features = ["derive"] }
-anyhow = "1.0.75"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "2", features = ["full", "printing", "visit"] }
+quote = "1"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
 codespan-reporting = "0.11.1"
 diffy = "0.3.0"
 basic-toml = "0.1.0"
-serde = { version = "1.0.193", features = ["derive"] }
-dirs = "5.0.1"
-bumpalo = { version = "3.14.0", features = ["collections"] }
+serde = { version = "1", features = ["derive"] }
+dirs = "5"
+bumpalo = { version = "3", features = ["collections"] }
 
 [build-dependencies]
-anyhow = "1.0.75"
+anyhow = "1"
 
 [features]
 regen-tests = [] # solely for testing
