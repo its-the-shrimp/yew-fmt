@@ -1,4 +1,4 @@
-// config: yew.ext=true
+// config: yew.html_flavor="Ext"
 use
 yew::prelude::*;
 

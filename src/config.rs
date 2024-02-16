@@ -40,7 +40,7 @@ struct RawConfigYew {
     use_small_heuristics: Option<UseSmallHeuristics>,
     use_prop_init_shorthand: Option<bool>,
     self_close_elements: Option<bool>,
-    ext: Option<bool>,
+    html_flavor: Option<HtmlFlavor>,
     #[serde(flatten)]
     unknown: HashMap<String, Unknown>,
 }
@@ -60,6 +60,14 @@ pub enum UseSmallHeuristics {
     Off,
     Default,
     Max,
+}
+
+/// Only present in [`RawConfigYew`] and not in [`YewConfig`] to not overcomplicate
+/// the formatter impl ahead of time
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum HtmlFlavor {
+    Base,
+    Ext,
 }
 
 fn parse_usize(src: &str) -> Result<usize, ParseIntError> {
@@ -89,6 +97,14 @@ fn parse_use_small_heuristics(src: &str) -> Result<UseSmallHeuristics> {
     })
 }
 
+fn parse_html_flavor(src: &str) -> Result<HtmlFlavor> {
+    Ok(match src {
+        "\"Base\"" => HtmlFlavor::Base,
+        "\"Ext\"" => HtmlFlavor::Ext,
+        _ => bail!(r#"expected `"Base"` or `"Ext"`, instead got `{src}`"#),
+    })
+}
+
 impl Config {
     #[rustfmt::skip]
     pub fn parse<'ext>(
@@ -100,12 +116,14 @@ impl Config {
             [usize] => {parse_usize};
             [bool] => {parse_bool};
             [UseSmallHeuristics] => {parse_use_small_heuristics};
+            [HtmlFlavor] => {parse_html_flavor};
         }
 
         macro_rules! field_kind {
             [usize] => {"an integer"};
             [bool] => {"a boolean"};
             [UseSmallHeuristics] => {"`use_small_heuristics` enum "};
+            [HtmlFlavor] => {"`html_flavor` enum"};
         }
 
         macro_rules! parse_field {
@@ -142,7 +160,7 @@ impl Config {
                 yew.unwrap_literal_prop_values: bool,
                 yew.use_prop_init_shorthand: bool,
                 yew.self_close_elements: bool,
-                yew.ext: bool
+                yew.html_flavor: HtmlFlavor
             });
         }
 
@@ -163,8 +181,8 @@ impl Config {
                     .unwrap_or(false),
                 self_close_elements: raw.yew.self_close_elements
                     .unwrap_or(true),
-                ext: raw.yew.ext
-                    .unwrap_or(false),
+                ext: raw.yew.html_flavor
+                    .map_or(false, |f| f == HtmlFlavor::Ext),
                 unknown: raw.yew.unknown,
             },
         })

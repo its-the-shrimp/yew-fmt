@@ -115,13 +115,18 @@ Make elements self-closed if they have no children.
 <div id="foo" />
 ```
 
-### `yew.ext`
-By default `yew-fmt` formats the HTML using Yew's syntax, however, this feature switches the syntax
-to that of [`yew-html-ext`](https://github.com/schvv31n/yew-html-ext), which should be
-fully compatible with the base syntax in almost all cases, but because this is theoretically
-not always true, such syntax extension is opt-in, enable it if you are using `yew-html-ext`.
-- Default value: `false`
-- Possible values: `true`, `false`
+### `yew.html_flavor`
+By default `yew-fmt` formats the HTML using Yew's original syntax, however,
+this feature allows for switching the HTML flavor used to accomodate e.g. community-made variations.
+As of now, the only supported syntactic variation is that of
+[`yew-html-ext`](https://github.com/schvv31n/yew-html-ext)
+- Default value: `"Base"`
+- Possible values: `"Base"`, `"Ext"`
+#### `Base`
+The default syntax specified by Yew itself.
+#### `Ext`
+The syntax of `yew-html-ext`.
+
 
 ## Keep in mind, work is still in progress
 As the project is very early on in development, not all CLI options of `rustfmt` are supported,

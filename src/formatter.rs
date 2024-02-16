@@ -21,6 +21,7 @@ fn is_skipped(attrs: &[Attribute]) -> bool {
 }
 
 fn print_break(out: &mut String, n_newlines: u8, indent: usize) {
+    if n_newlines == 0 { return }
     out.reserve(indent + 1);
     for _ in 0..n_newlines {
         out.push('\n')
@@ -295,12 +296,12 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
 
         let mut comment_added = false;
         for comment in CommentParser(comment) {
+            if replace(&mut comment_added, true) {
+                sep(self);
+            }
             match comment {
                 Comment::Line(line) => self.add_line_comment(line),
                 Comment::Multi(inner) => self.add_raw_text(inner),
-            }
-            if replace(&mut comment_added, true) {
-                sep(self);
             }
         }
 
@@ -311,7 +312,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     }
 
     pub fn add_comments(&mut self, ctx: &FormatCtx<'_, 'src>, until: LineColumn) -> Result {
-        self.add_comments_with_sep(ctx, until, Self::add_raw_space)
+        self.add_comments_with_sep(ctx, until, |b| b.add_raw_sep(0))
     }
 
     pub fn add_space(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result {
@@ -861,6 +862,7 @@ impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
     fn print_fmt_block(&mut self, mut block: FmtBlock<'fmt, 'src>, end: LineColumn) -> Result {
         let indent = self.line_indent(self.cur_pos.line)?;
         block.determine_breaking(self, self.cur_pos.column - indent, indent);
+        //panic!("{block:#?}");
         block.print(indent, self.config, self.output);
         self.cur_pos = end;
         let off = self.pos_to_byte_offset(end)?;
