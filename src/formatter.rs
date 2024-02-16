@@ -191,6 +191,16 @@ enum FmtToken<'fmt, 'src> {
     Block(FmtBlock<'fmt, 'src>),
 }
 
+impl FmtToken<'_, '_> {
+    fn is_broken(&self) -> bool {
+        match self {
+            FmtToken::Text(text) => text.bytes().any(|b| b == b'\n'),
+            FmtToken::LineComment(_) | FmtToken::Sep(_) => false,
+            FmtToken::Block(block) => block.spacing.is_none(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub struct Spacing {
     pub before: bool,
@@ -538,7 +548,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             return true;
         }
 
-        if self.tokens.iter().any(|t| matches!(t, FmtToken::Block(b) if b.spacing.is_none())) {
+        if self.tokens.iter().any(FmtToken::is_broken) {
             self.force_breaking(ctx, indent);
             return true;
         }

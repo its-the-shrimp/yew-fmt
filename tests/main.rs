@@ -4,6 +4,11 @@ mod common;
 use common::cmp;
 
 #[test]
+fn base_and_ext_coexist_peacefully() {
+    cmp("tests/samples/base_and_ext_coexist_peacefully")
+}
+
+#[test]
 fn breaking_propagated() {
     cmp("tests/samples/breaking_propagated")
 }

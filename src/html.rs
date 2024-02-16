@@ -169,22 +169,36 @@ impl ParseWithCtx for Html {
     type Context = bool;
 
     fn parse(input: ParseStream, ext: bool) -> syn::Result<Self> {
+        /// Assumes that `cursor` is pointing at a `for` token
+        fn for_loop_like(cursor: Cursor<'_>) -> bool {
+            let Some((_, cursor)) = cursor.token_tree() else { return false };
+            // The `take_while` call makes sure that e.g. `html!(for for i in 0 .. 10 {})` is
+            // classified correctly
+            TokenIter(cursor).take_while(|t| !t.is_ident("for")).any(|t| t.is_ident("in"))
+        }
+
         let cursor = input.cursor();
         Ok(match HtmlTree::peek_html_type(cursor) {
-            Some(HtmlTreeKind::For) if ext && TokenIter(cursor).any(|t| t.is_ident("in")) => {
-                Self::Tree(HtmlTree::For(input.parse_with_ctx(ext)?))
+            Some(HtmlTreeKind::For) => {
+                if ext && for_loop_like(cursor) {
+                    Self::Tree(HtmlTree::For(input.parse_with_ctx(ext)?))
+                } else {
+                    Self::Value(HtmlBlockContent::Iterable(input.parse()?, input.parse()?).into())
+                }
             }
-            Some(HtmlTreeKind::Match) if ext => {
-                Self::Tree(HtmlTree::Match(input.parse_with_ctx(ext)?))
+            Some(HtmlTreeKind::Match) => {
+                if ext {
+                    Self::Tree(HtmlTree::Match(input.parse_with_ctx(ext)?))
+                } else {
+                    Self::Value(HtmlBlockContent::Expr(input.parse()?).into())
+                }
             }
-            // TODO: more descriptive error msg with a link to the docs
-            Some(HtmlTreeKind::Match) => return Err(input.error("unexpected token")),
             Some(HtmlTreeKind::If) => Self::Tree(HtmlTree::If(input.parse_with_ctx(ext)?)),
             Some(HtmlTreeKind::Block) => Self::Tree(HtmlTree::Block(input.parse()?)),
             Some(HtmlTreeKind::Element) => {
                 Self::Tree(HtmlTree::Element(input.parse_with_ctx(ext)?))
             }
-            Some(HtmlTreeKind::For) | None => Self::Value(input.parse()?),
+            None => Self::Value(input.parse()?),
         })
     }
 }
