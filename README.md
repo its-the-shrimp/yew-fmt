@@ -35,6 +35,7 @@ On top of those, `yew-fmt` provides the following options of its own:
 Maximum width of an HTML node before falling back to vertical formatting.
 - Default value: inherited from [`max_width`](https://rust-lang.github.io/rustfmt#max_width)
 - Possible values: any positive integer
+
 ### `yew.use_small_heuristics`
 Along with `yew.html_width`, different kinds of nodes have different rules for when to be broken up. This option controls what set of rules to use.
 - Default value: inherited from [`use_small_heuristics`](https://rust-lang.github.io/rustfmt#use_small_heuristics)
@@ -114,8 +115,17 @@ Make elements self-closed if they have no children.
 <div id="foo" />
 ```
 
+### `yew.ext`
+By default `yew-fmt` formats the HTML using Yew's syntax, however, this feature switches the syntax
+to that of [`yew-html-ext`](https://github.com/schvv31n/yew-html-ext), which should be
+fully compatible with the base syntax in almost all cases, but because this is theoretically
+not always true, such syntax extension is opt-in, enable it if you are using `yew-html-ext`.
+- Default value: `false`
+- Possible values: `true`, `false`
+
 ## Keep in mind, work is still in progress
-As the project is very early on in development, not all CLI options of `rustfmt` are supported, yet the eventual target of the project is 100% compatibility, so all the ❌ in the table 
+As the project is very early on in development, not all CLI options of `rustfmt` are supported,
+yet the eventual target of the project is 100% compatibility, so all the ❌ in the table 
 below will eventually become 🟩.
 
 | CLI option | support |
