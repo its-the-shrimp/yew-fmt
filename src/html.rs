@@ -19,7 +19,7 @@ use syn::{
     punctuated::{Pair, Punctuated},
     spanned::Spanned,
     token::Brace,
-    Expr, Ident, Lit, Pat, Token, Type,
+    Block, Expr, Ident, Lit, Local, LocalInit, Pat, PatType, Stmt, Token, Type,
 };
 
 /// Overrides `Ident`'s default `Parse` behaviour by accepting Rust keywords
@@ -63,6 +63,7 @@ pub enum HtmlTree {
     If(Box<HtmlIf>),
     For(Box<HtmlFor>),
     Match(Box<HtmlMatch>),
+    Let(Box<HtmlLet>),
 }
 
 pub struct HtmlBlock {
@@ -94,7 +95,7 @@ pub struct HtmlFragment {
 pub struct HtmlDynamicElement {
     pub lt_token: Token![<],
     pub at_token: Token![@],
-    pub name: BracedExpr,
+    pub name: Block,
     pub props: Vec<HtmlProp>,
     pub children: Vec<HtmlTree>,
     pub closing_tag: Option<(Token![>], Token![<], Token![@])>,
@@ -121,12 +122,7 @@ pub struct HtmlProp {
 pub enum HtmlPropKind {
     Shortcut(Brace, Punctuated<AnyIdent, Token![-]>),
     Literal(Punctuated<AnyIdent, Token![-]>, Token![=], Lit),
-    Expr(Punctuated<AnyIdent, Token![-]>, Token![=], BracedExpr),
-}
-
-pub struct BracedExpr {
-    pub brace: Brace,
-    pub expr: Expr,
+    Expr(Punctuated<AnyIdent, Token![-]>, Token![=], Block),
 }
 
 pub struct HtmlIf {
@@ -164,6 +160,8 @@ pub struct HtmlMatchArm {
     pub fat_arrow_token: Token![=>],
     pub body: Html,
 }
+
+pub struct HtmlLet(Local);
 
 impl ParseWithCtx for Html {
     type Context = bool;
@@ -216,6 +214,8 @@ impl ParseWithCtx for HtmlTree {
             Self::For(input.parse_with_ctx(ext)?)
         } else if ext && HtmlMatch::parseable(cursor) {
             Self::Match(input.parse_with_ctx(ext)?)
+        } else if ext && HtmlLet::parseable(cursor) {
+            Self::Let(input.parse()?)
         } else {
             Self::Block(input.parse()?)
         })
@@ -415,13 +415,6 @@ impl Parse for HtmlProp {
     }
 }
 
-impl Parse for BracedExpr {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let inner;
-        Ok(Self { brace: braced!(inner in input), expr: inner.parse()? })
-    }
-}
-
 impl ParseWithCtx for HtmlIf {
     type Context = bool;
 
@@ -500,6 +493,34 @@ impl ParseWithCtx for HtmlMatchArm {
     }
 }
 
+impl Parse for HtmlLet {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let let_token = input.parse()?;
+
+        let mut pat = Pat::parse_single(input)?;
+        if let Some(colon_token) = input.parse()? {
+            pat = Pat::Type(PatType {
+                attrs: vec![],
+                pat: Box::new(pat),
+                colon_token,
+                ty: input.parse()?,
+            });
+        }
+
+        let init = if let Some(eq_token) = input.parse()? {
+            Some(LocalInit {
+                eq_token,
+                expr: input.parse()?,
+                diverge: Option::<Token![else]>::parse(input)?.try_zip(|| input.parse())?,
+            })
+        } else {
+            None
+        };
+
+        Ok(Self(Local { attrs: vec![], let_token, pat, init, semi_token: input.parse()? }))
+    }
+}
+
 impl HtmlTree {
     fn peek_html_type(cursor: Cursor) -> Option<HtmlTreeKind> {
         if HtmlIf::parseable(cursor) {
@@ -559,6 +580,12 @@ impl HtmlMatch {
     }
 }
 
+impl HtmlLet {
+    fn parseable(cursor: Cursor) -> bool {
+        cursor.ident().is_some_and(|(i, _)| i == "let")
+    }
+}
+
 pub const fn props_spacing(self_closing: bool) -> Spacing {
     Spacing { before: true, between: true, after: self_closing }
 }
@@ -594,6 +621,7 @@ impl<'src> Format<'src> for HtmlTree {
             HtmlTree::If(i) => i.format(block, ctx),
             HtmlTree::For(f) => f.format(block, ctx),
             HtmlTree::Match(m) => m.format(block, ctx),
+            HtmlTree::Let(l) => l.format(block, ctx),
         }
     }
 }
@@ -748,7 +776,7 @@ impl<'src> Format<'src> for HtmlProp {
             HtmlPropKind::Expr(name, eq, expr) => {
                 if ctx.config.yew.use_prop_init_shorthand
                     && name.len() == 1
-                    && matches!(&expr.expr, Expr::Path(p)
+                    && matches!(&*expr.stmts, [Stmt::Expr(Expr::Path(p), None)]
                         if p.path.is_ident(&**name.first().context("prop name is empty")?))
                 {
                     return expr.format(block, ctx);
@@ -756,8 +784,10 @@ impl<'src> Format<'src> for HtmlProp {
 
                 block.add_source_punctuated(ctx, name)?;
                 block.add_source(ctx, eq)?;
-                if ctx.config.yew.unwrap_literal_prop_values && matches!(expr.expr, Expr::Lit(_)) {
-                    block.add_source(ctx, &expr.expr)
+                if ctx.config.yew.unwrap_literal_prop_values
+                    && matches!(&*expr.stmts, [Stmt::Expr(Expr::Lit(_), None)])
+                {
+                    block.add_source_iter(ctx, Location::from_slice(&expr.stmts))
                 } else {
                     expr.format(block, ctx)
                 }
@@ -766,11 +796,11 @@ impl<'src> Format<'src> for HtmlProp {
     }
 }
 
-impl<'src> Format<'src> for BracedExpr {
+impl<'src> Format<'src> for Block {
     fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result {
-        block.add_source(ctx, self.brace.span.open())?;
-        block.add_source(ctx, &self.expr)?;
-        block.add_source(ctx, self.brace.span.close())
+        block.add_source(ctx, self.brace_token.span.open())?;
+        block.add_source_iter(ctx, Location::from_slice(&self.stmts))?;
+        block.add_source(ctx, self.brace_token.span.close())
     }
 }
 
@@ -908,6 +938,29 @@ impl<'src> Format<'src> for HtmlMatchArm {
     }
 }
 
+impl<'src> Format<'src> for HtmlLet {
+    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result {
+        let Self(stmt) = self;
+        block.add_source(ctx, stmt.let_token)?;
+        if let Pat::Type(PatType { pat, colon_token, ty, .. }) = &stmt.pat {
+            block.add_source_with_space(ctx, pat)?;
+            block.add_source_with_space(ctx, colon_token)?;
+            block.add_source_with_space(ctx, ty)?;
+        } else {
+            block.add_source_with_space(ctx, &stmt.pat)?;
+        };
+        if let Some(init) = &stmt.init {
+            block.add_source_with_space(ctx, init.eq_token)?;
+            block.add_source_with_space(ctx, &init.expr)?;
+            if let Some((else_token, expr)) = &init.diverge {
+                block.add_source_with_space(ctx, else_token)?;
+                block.add_source_with_space(ctx, expr)?;
+            }
+        }
+        block.add_source(ctx, stmt.semi_token)
+    }
+}
+
 impl Located for Html {
     fn start(&self) -> LineColumn {
         match self {
@@ -939,6 +992,7 @@ impl Located for HtmlTree {
             Self::If(x) => x.start(),
             Self::For(x) => x.start(),
             Self::Match(x) => x.start(),
+            Self::Let(x) => x.start(),
         }
     }
 
@@ -949,6 +1003,7 @@ impl Located for HtmlTree {
             Self::If(x) => x.end(),
             Self::For(x) => x.end(),
             Self::Match(x) => x.end(),
+            Self::Let(x) => x.end(),
         }
     }
 
@@ -959,6 +1014,7 @@ impl Located for HtmlTree {
             Self::If(x) => x.loc(),
             Self::For(x) => x.loc(),
             Self::Match(x) => x.loc(),
+            Self::Let(x) => x.loc(),
         }
     }
 }
@@ -1015,6 +1071,31 @@ impl Located for HtmlLiteralElement {
 
     fn end(&self) -> LineColumn {
         self.closing_gt_token.end()
+    }
+}
+
+impl Located for HtmlProp {
+    fn start(&self) -> LineColumn {
+        if let Some(tilde) = &self.access_spec {
+            return tilde.span.start();
+        }
+
+        match &self.kind {
+            HtmlPropKind::Shortcut(brace, _) => brace.span.open().start(),
+            HtmlPropKind::Literal(name, ..) | HtmlPropKind::Expr(name, ..) => unsafe {
+                // Safety: the name of the prop is guaranteed to be non-empty by
+                // `Punctuated::parse_terminated(_nonempty)`
+                name.first().unwrap_unchecked().span().start()
+            },
+        }
+    }
+
+    fn end(&self) -> LineColumn {
+        match &self.kind {
+            HtmlPropKind::Shortcut(brace, _) => brace.span.close().end(),
+            HtmlPropKind::Literal(_, _, lit) => lit.span().end(),
+            HtmlPropKind::Expr(_, _, expr) => expr.brace_token.span.close().end(),
+        }
     }
 }
 
@@ -1120,27 +1201,12 @@ impl Located for HtmlMatchArm {
     }
 }
 
-impl Located for HtmlProp {
+impl Located for HtmlLet {
     fn start(&self) -> LineColumn {
-        if let Some(tilde) = &self.access_spec {
-            return tilde.span.start();
-        }
-
-        match &self.kind {
-            HtmlPropKind::Shortcut(brace, _) => brace.span.open().start(),
-            HtmlPropKind::Literal(name, ..) | HtmlPropKind::Expr(name, ..) => unsafe {
-                // Safety: the name of the prop is guaranteed to be non-empty by
-                // `Punctuated::parse_terminated(_nonempty)`
-                name.first().unwrap_unchecked().span().start()
-            },
-        }
+        self.0.let_token.start()
     }
 
     fn end(&self) -> LineColumn {
-        match &self.kind {
-            HtmlPropKind::Shortcut(brace, _) => brace.span.close().end(),
-            HtmlPropKind::Literal(_, _, lit) => lit.span().end(),
-            HtmlPropKind::Expr(_, _, expr) => expr.brace.span.close().end(),
-        }
+        self.0.semi_token.end()
     }
 }

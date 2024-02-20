@@ -21,7 +21,9 @@ fn is_skipped(attrs: &[Attribute]) -> bool {
 }
 
 fn print_break(out: &mut String, n_newlines: u8, indent: usize) {
-    if n_newlines == 0 { return }
+    if n_newlines == 0 {
+        return;
+    }
     out.reserve(indent + 1);
     for _ in 0..n_newlines {
         out.push('\n')
@@ -112,6 +114,16 @@ impl<'src> Iterator for CommentParser<'src> {
 pub struct Location {
     pub start: LineColumn,
     pub end: LineColumn,
+}
+
+impl Location {
+    pub fn from_slice<T: Located>(src: impl AsRef<[T]>) -> Option<Self> {
+        match src.as_ref() {
+            [first, .., last] => Some(Self { start: first.start(), end: last.end() }),
+            [only] => Some(only.loc()),
+            [] => None,
+        }
+    }
 }
 
 /// Represents an object that has an associated location in the source

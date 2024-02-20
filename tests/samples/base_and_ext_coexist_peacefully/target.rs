@@ -1,4 +1,3 @@
-// config: yew.ext=false
 // the following is an html! invocation that's valid in base Yew syntax, but invalid in
 // yew-html-ext
 use yew::prelude::*;

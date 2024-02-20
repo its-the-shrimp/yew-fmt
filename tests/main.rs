@@ -9,6 +9,11 @@ fn base_and_ext_coexist_peacefully() {
 }
 
 #[test]
+fn block_in_prop() {
+    cmp("tests/samples/block_in_prop")
+}
+
+#[test]
 fn breaking_propagated() {
     cmp("tests/samples/breaking_propagated")
 }
@@ -26,6 +31,11 @@ fn for_block() {
 #[test]
 fn html_for() {
     cmp("tests/samples/html_for")
+}
+
+#[test]
+fn html_let() {
+    cmp("tests/samples/html_let")
 }
 
 #[test]

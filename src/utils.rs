@@ -43,6 +43,7 @@ impl StrExt for str {
 
 pub trait OptionExt<T> {
     fn choose<U>(&self, on_true: U, on_false: U) -> U;
+    fn try_zip<U, E>(self, f: impl FnOnce() -> Result<U, E>) -> Result<Option<(T, U)>, E>;
     fn try_map_or<U, E>(self, default: U, f: impl FnOnce(T) -> Result<U, E>) -> Result<U, E>;
 }
 
@@ -53,6 +54,13 @@ impl<T> OptionExt<T> for Option<T> {
         } else {
             on_none
         }
+    }
+
+    fn try_zip<U, E>(self, f: impl FnOnce() -> Result<U, E>) -> Result<Option<(T, U)>, E> {
+        Ok(match self {
+            Some(x) => Some((x, f()?)),
+            None => None,
+        })
     }
 
     fn try_map_or<U, E>(self, default: U, f: impl FnOnce(T) -> Result<U, E>) -> Result<U, E> {
