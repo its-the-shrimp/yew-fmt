@@ -122,7 +122,7 @@ pub struct HtmlProp {
 pub enum HtmlPropKind {
     Shortcut(Brace, Punctuated<AnyIdent, Token![-]>),
     Literal(Punctuated<AnyIdent, Token![-]>, Token![=], Lit),
-    Expr(Punctuated<AnyIdent, Token![-]>, Token![=], Block),
+    Block(Punctuated<AnyIdent, Token![-]>, Token![=], Block),
 }
 
 pub struct HtmlIf {
@@ -406,7 +406,7 @@ impl Parse for HtmlProp {
             let name = Punctuated::parse_separated_nonempty(input)?;
             let eq_token = input.parse()?;
             if input.peek(Brace) {
-                HtmlPropKind::Expr(name, eq_token, input.parse()?)
+                HtmlPropKind::Block(name, eq_token, input.parse()?)
             } else {
                 HtmlPropKind::Literal(name, eq_token, input.parse()?)
             }
@@ -740,11 +740,10 @@ impl<'src> Format<'src> for HtmlLiteralElement {
                 element_children_spacing(ctx, &self.children),
                 ChainingRule::End,
                 |block, ctx| {
-                    for child in &self.children {
+                    Ok(for child in &self.children {
                         child.format(block, ctx)?;
                         block.add_sep(ctx, child.end())?;
-                    }
-                    Ok(())
+                    })
                 },
             )?;
             block.add_source(ctx, self.div_token)?;
@@ -759,9 +758,7 @@ impl<'src> Format<'src> for HtmlLiteralElement {
 
 impl<'src> Format<'src> for HtmlProp {
     fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result {
-        if let Some(tilde) = &self.access_spec {
-            block.add_source(ctx, tilde)?;
-        }
+        block.add_source_iter(ctx, self.access_spec)?;
         match &self.kind {
             HtmlPropKind::Shortcut(brace, name) => {
                 block.add_source(ctx, brace.span.open())?;
@@ -773,25 +770,25 @@ impl<'src> Format<'src> for HtmlProp {
                 block.add_source(ctx, eq)?;
                 block.add_source(ctx, lit)
             }
-            HtmlPropKind::Expr(name, eq, expr) => {
-                if ctx.config.yew.use_prop_init_shorthand
-                    && name.len() == 1
-                    && matches!(&*expr.stmts, [Stmt::Expr(Expr::Path(p), None)]
-                        if p.path.is_ident(&**name.first().context("prop name is empty")?))
+            HtmlPropKind::Block(name, eq, expr) => match &*expr.stmts {
+                [Stmt::Expr(Expr::Path(p), None)]
+                    if ctx.config.yew.use_prop_init_shorthand
+                        && name.len() == 1
+                        && p.path.is_ident(&**name.first().context("prop name is empty")?) =>
                 {
-                    return expr.format(block, ctx);
-                }
-
-                block.add_source_punctuated(ctx, name)?;
-                block.add_source(ctx, eq)?;
-                if ctx.config.yew.unwrap_literal_prop_values
-                    && matches!(&*expr.stmts, [Stmt::Expr(Expr::Lit(_), None)])
-                {
-                    block.add_source_iter(ctx, Location::from_slice(&expr.stmts))
-                } else {
                     expr.format(block, ctx)
                 }
-            }
+                [Stmt::Expr(Expr::Lit(l), None)] if ctx.config.yew.unwrap_literal_prop_values => {
+                    block.add_source_punctuated(ctx, name)?;
+                    block.add_source(ctx, eq)?;
+                    block.add_source(ctx, l)
+                }
+                _ => {
+                    block.add_source_punctuated(ctx, name)?;
+                    block.add_source(ctx, eq)?;
+                    expr.format(block, ctx)
+                }
+            },
         }
     }
 }
@@ -799,7 +796,13 @@ impl<'src> Format<'src> for HtmlProp {
 impl<'src> Format<'src> for Block {
     fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result {
         block.add_source(ctx, self.brace_token.span.open())?;
-        block.add_source_iter(ctx, Location::from_slice(&self.stmts))?;
+        match &*self.stmts {
+            [] => (),
+            [only] => block.add_source(ctx, only)?,
+            [first, .., last] => {
+                block.add_source(ctx, Location { start: first.start(), end: last.end() })?
+            }
+        }
         block.add_source(ctx, self.brace_token.span.close())
     }
 }
@@ -1082,7 +1085,7 @@ impl Located for HtmlProp {
 
         match &self.kind {
             HtmlPropKind::Shortcut(brace, _) => brace.span.open().start(),
-            HtmlPropKind::Literal(name, ..) | HtmlPropKind::Expr(name, ..) => unsafe {
+            HtmlPropKind::Literal(name, ..) | HtmlPropKind::Block(name, ..) => unsafe {
                 // Safety: the name of the prop is guaranteed to be non-empty by
                 // `Punctuated::parse_terminated(_nonempty)`
                 name.first().unwrap_unchecked().span().start()
@@ -1094,7 +1097,7 @@ impl Located for HtmlProp {
         match &self.kind {
             HtmlPropKind::Shortcut(brace, _) => brace.span.close().end(),
             HtmlPropKind::Literal(_, _, lit) => lit.span().end(),
-            HtmlPropKind::Expr(_, _, expr) => expr.brace_token.span.close().end(),
+            HtmlPropKind::Block(_, _, expr) => expr.brace_token.span.close().end(),
         }
     }
 }

@@ -29,6 +29,8 @@ anyhow = "1"
 regen-tests = [] # solely for testing
 
 [lints.clippy]
+unit_arg = "allow"
+
 single_char_lifetime_names = "warn"
 deref_by_slicing = "warn"
 derive_partial_eq_without_eq = "warn"

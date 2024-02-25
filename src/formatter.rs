@@ -43,7 +43,7 @@ fn add_last_line_len(prev: usize, new: &str) -> usize {
 enum Comment<'src> {
     /// the initial `//` and the newline are not included
     Line(&'src str),
-    /// the `/*` and `*/` are not included
+    /// the `/*` and `*/` are included
     Multi(&'src str),
 }
 
@@ -114,16 +114,6 @@ impl<'src> Iterator for CommentParser<'src> {
 pub struct Location {
     pub start: LineColumn,
     pub end: LineColumn,
-}
-
-impl Location {
-    pub fn from_slice<T: Located>(src: impl AsRef<[T]>) -> Option<Self> {
-        match src.as_ref() {
-            [first, .., last] => Some(Self { start: first.start(), end: last.end() }),
-            [only] => Some(only.loc()),
-            [] => None,
-        }
-    }
 }
 
 /// Represents an object that has an associated location in the source
@@ -204,16 +194,6 @@ enum FmtToken<'fmt, 'src> {
     Block(FmtBlock<'fmt, 'src>),
 }
 
-impl FmtToken<'_, '_> {
-    fn is_broken(&self) -> bool {
-        match self {
-            FmtToken::Text(text) => text.bytes().any(|b| b == b'\n'),
-            FmtToken::LineComment(_) | FmtToken::Sep(_) => false,
-            FmtToken::Block(block) => block.spacing.is_none(),
-        }
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub struct Spacing {
     pub before: bool,
@@ -277,20 +257,39 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         }
     }
 
-    fn add_raw_text(&mut self, text: &'src str) {
-        self.tokens.push(FmtToken::Text(text));
-        self.width += text.len();
-    }
+    // Functions for adding all the token kinds directly; not to be exposed
 
-    fn add_raw_space(&mut self) {
-        self.tokens.push(FmtToken::Text(" "));
-        self.width += 1;
+    fn add_raw_text(&mut self, text: &'src str) {
+        match text.bytes().filter(|&b| b == b'\n').count() {
+            0 => self.width += text.len(),
+            _ => self.spacing = None,
+        }
+        self.tokens.push(FmtToken::Text(text))
     }
 
     fn add_line_comment(&mut self, comment: &'src str) {
-        self.tokens.push(FmtToken::LineComment(comment));
         self.width += comment.len() + 4;
+        self.tokens.push(FmtToken::LineComment(comment))
     }
+
+    fn add_raw_sep(&mut self, n_newlines: u8) {
+        self.width += self.spacing.map_or(false, |s| s.between) as usize;
+        self.tokens.push(FmtToken::Sep(n_newlines))
+    }
+
+    fn add_raw_block(&mut self, mut block: FmtBlock<'fmt, 'src>) {
+        if matches!(block.tokens.last(), Some(FmtToken::Sep(_))) {
+            block.tokens.pop();
+        }
+        match block.spacing {
+            Some(_) => self.width += block.width,
+            None => self.spacing = None,
+        }
+        self.cur_offset = block.cur_offset;
+        self.tokens.push(FmtToken::Block(block))
+    }
+
+    // Utilities
 
     fn add_comments_with_sep(
         &mut self,
@@ -328,7 +327,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     }
 
     pub fn add_space(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result {
-        self.add_raw_space();
+        self.add_raw_text(" ");
         self.add_comments(ctx, at)
     }
 
@@ -342,11 +341,6 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         self.add_raw_text(text);
         self.cur_offset += text.len();
         Ok(())
-    }
-
-    fn add_raw_sep(&mut self, n_newlines: u8) {
-        self.tokens.push(FmtToken::Sep(n_newlines));
-        self.width += self.spacing.map_or(false, |s| s.between) as usize;
     }
 
     pub fn add_sep(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result {
@@ -388,15 +382,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     ) -> R {
         let mut block = Self::new(self.tokens.bump(), spacing, chaining, self.cur_offset);
         let res = f(&mut block);
-        if matches!(block.tokens.last(), Some(FmtToken::Sep(_))) {
-            block.tokens.pop();
-        }
-        match spacing {
-            Some(_) => self.width += block.width,
-            None => self.spacing = None,
-        }
-        self.cur_offset = block.cur_offset;
-        self.tokens.push(FmtToken::Block(block));
+        self.add_raw_block(block);
         res
     }
 
@@ -467,16 +453,19 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         Ok(())
     }
 
-    pub fn add_source_punctuated(
+    pub fn add_source_punctuated<T, P>(
         &mut self,
         ctx: &FormatCtx<'_, 'src>,
-        iter: &Punctuated<impl Located, impl Located>,
-    ) -> Result {
+        iter: &Punctuated<T, P>,
+    ) -> Result
+    where
+        for<'any> &'any T: Located,
+        for<'any> &'any P: Located,
+    {
         for pair in iter.pairs() {
-            self.add_source(ctx, pair.value().loc())?;
-            if let Some(punct) = pair.punct() {
-                self.add_source(ctx, punct.loc())?;
-            }
+            let (value, punct) = pair.into_tuple();
+            self.add_source(ctx, value)?;
+            self.add_source_iter(ctx, punct)?;
         }
         Ok(())
     }
@@ -561,11 +550,6 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             return true;
         }
 
-        if self.tokens.iter().any(FmtToken::is_broken) {
-            self.force_breaking(ctx, indent);
-            return true;
-        }
-
         false
     }
 
@@ -579,28 +563,26 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
 
         let space_if = |c| if c { Sep::Space } else { Sep::None };
 
-        fn print_token(token: &FmtToken, indent: usize, sep: Sep, cfg: &Config, out: &mut String) {
-            match token {
-                FmtToken::Text(text) => out.push_str(text),
-                FmtToken::LineComment(comment) => {
-                    if let Sep::Newline = sep {
-                        out.push_str("//");
-                        out.push_str(comment);
-                        print_break(out, 1, indent)
-                    } else {
-                        out.push_str("/*");
-                        out.push_str(comment);
-                        out.push_str("*/")
-                    }
+        let print_token = |token: &FmtToken, out: &mut String, indent, sep| match token {
+            FmtToken::Text(text) => out.push_str(text),
+            FmtToken::LineComment(comment) => {
+                if let Sep::Newline = sep {
+                    out.push_str("//");
+                    out.push_str(comment);
+                    print_break(out, 1, indent)
+                } else {
+                    out.push_str("/*");
+                    out.push_str(comment);
+                    out.push_str("*/")
                 }
-                FmtToken::Sep(n_newlines) => match sep {
-                    Sep::None => (),
-                    Sep::Space => out.push(' '),
-                    Sep::Newline => print_break(out, *n_newlines, indent),
-                },
-                FmtToken::Block(block) => block.print(indent, cfg, out),
             }
-        }
+            FmtToken::Sep(n_newlines) => match sep {
+                Sep::None => (),
+                Sep::Space => out.push(' '),
+                Sep::Newline => print_break(out, *n_newlines, indent),
+            },
+            FmtToken::Block(block) => block.print(indent, cfg, out),
+        };
 
         if self.tokens.is_empty() {
             if self.spacing.map_or(false, |s| s.before && s.after) {
@@ -611,7 +593,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
                 out.push(' ');
             }
             for token in &self.tokens {
-                print_token(token, indent, space_if(spacing.between), cfg, out);
+                print_token(token, out, indent, space_if(spacing.between));
             }
             if spacing.after {
                 out.push(' ');
@@ -620,7 +602,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             let new_indent = indent + cfg.tab_spaces;
             print_break(out, 1, new_indent);
             for token in &self.tokens {
-                print_token(token, new_indent, Sep::Newline, cfg, out);
+                print_token(token, out, new_indent, Sep::Newline);
             }
             if let Some(FmtToken::LineComment(_)) = self.tokens.last() {
                 out.truncate(out.len() - 4)
