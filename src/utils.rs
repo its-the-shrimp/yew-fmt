@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context};
-use proc_macro2::{TokenStream, TokenTree};
+use proc_macro2::{TokenTree, Ident, TokenStream};
+use quote::ToTokens;
 use std::{
     fs::{write, File},
     io::{self, Read, Seek, Write},
@@ -7,11 +8,7 @@ use std::{
     path::Path,
     str::FromStr,
 };
-use syn::{
-    buffer::Cursor,
-    parse::{Parse, ParseBuffer, ParseStream, Parser},
-    punctuated::Punctuated,
-};
+use syn::{buffer::Cursor, parse::{Parse, ParseStream}, ext::IdentExt};
 
 pub type Result<T = (), E = anyhow::Error> = std::result::Result<T, E>;
 
@@ -146,69 +143,27 @@ impl TokenTreeExt for TokenTree {
     }
 }
 
-pub trait ParseWithCtx: Sized {
-    type Context;
+/// Overrides `Ident`'s default `Parse` behaviour by accepting Rust keywords
+pub struct AnyIdent(Ident);
 
-    fn parse(input: ParseStream, ctx: Self::Context) -> syn::Result<Self>;
-}
-
-impl<T: ParseWithCtx> ParseWithCtx for Box<T> {
-    type Context = T::Context;
-
-    fn parse(input: ParseStream, ctx: Self::Context) -> syn::Result<Self> {
-        T::parse(input, ctx).map(Box::new)
+impl Parse for AnyIdent {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ident::parse_any(input).map(Self)
     }
 }
 
-pub trait ParseBufferExt {
-    fn parse_with_ctx<T: ParseWithCtx>(&self, ctx: T::Context) -> syn::Result<T>;
-}
-
-impl<'buf> ParseBufferExt for ParseBuffer<'buf> {
-    fn parse_with_ctx<T: ParseWithCtx>(&self, ctx: T::Context) -> syn::Result<T> {
-        T::parse(self, ctx)
+impl ToTokens for AnyIdent {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.0.to_tokens(tokens)
     }
 }
 
-pub trait PunctuatedExt<T>
-where
-    Self: Sized,
-    T: ParseWithCtx,
-    T::Context: Copy,
-{
-    fn parse_terminated_with_ctx(input: ParseStream, ctx: T::Context) -> syn::Result<Self>;
-}
-
-impl<T, P> PunctuatedExt<T> for Punctuated<T, P>
-where
-    T: ParseWithCtx,
-    T::Context: Copy,
-    P: Parse,
-{
-    fn parse_terminated_with_ctx(input: ParseStream, ctx: T::Context) -> syn::Result<Self> {
-        let mut punctuated = Punctuated::new();
-
-        loop {
-            if input.is_empty() {
-                break;
-            }
-            let value = input.parse_with_ctx(ctx)?;
-            punctuated.push_value(value);
-            if input.is_empty() {
-                break;
-            }
-            let punct = input.parse()?;
-            punctuated.push_punct(punct);
-        }
-
-        Ok(punctuated)
+impl Deref for AnyIdent {
+    type Target = Ident;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
-
-pub fn parse2_with_ctx<T: ParseWithCtx>(stream: TokenStream, ctx: T::Context) -> syn::Result<T> {
-    (|input: ParseStream| T::parse(input, ctx)).parse2(stream)
-}
-
 /// like `std::fs::write`, but will also create a `.bk` file
 pub fn write_with_backup(filename: &str, new_text: impl AsRef<[u8]>) -> Result {
     let new_text = new_text.as_ref();

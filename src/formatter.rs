@@ -1,6 +1,5 @@
 use crate::config::Config;
-use crate::html::*;
-use crate::utils::{default, parse2_with_ctx, Result, SliceExt, StrExt};
+use crate::utils::{default, Result, SliceExt, StrExt};
 use anyhow::{bail, Context};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -150,18 +149,18 @@ impl Located for Location {
     }
 }
 
-pub trait Format<'src> {
-    fn format(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FormatCtx<'_, 'src>) -> Result;
+pub trait Format {
+    fn format<'src>(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FmtCtx<'_, 'src>) -> Result;
     /// equivalent to:
     /// ```rust,ignore
     /// block.add_space(ctx, self.start())?;
     /// self.format(block, ctx)?;
     /// ```
     /// but does so more concisely
-    fn format_with_space(
+    fn format_with_space<'src>(
         &self,
         block: &mut FmtBlock<'_, 'src>,
-        ctx: &mut FormatCtx<'_, 'src>,
+        ctx: &mut FmtCtx<'_, 'src>,
     ) -> Result
     where
         Self: Located,
@@ -293,7 +292,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
 
     fn add_comments_with_sep(
         &mut self,
-        ctx: &FormatCtx<'_, 'src>,
+        ctx: &FmtCtx<'_, 'src>,
         until: LineColumn,
         mut sep: impl FnMut(&mut Self),
     ) -> Result {
@@ -322,28 +321,23 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         Ok(())
     }
 
-    pub fn add_comments(&mut self, ctx: &FormatCtx<'_, 'src>, until: LineColumn) -> Result {
+    pub fn add_comments(&mut self, ctx: &FmtCtx<'_, 'src>, until: LineColumn) -> Result {
         self.add_comments_with_sep(ctx, until, |b| b.add_raw_sep(0))
     }
 
-    pub fn add_space(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result {
+    pub fn add_space(&mut self, ctx: &FmtCtx<'_, 'src>, at: LineColumn) -> Result {
         self.add_raw_text(" ");
         self.add_comments(ctx, at)
     }
 
-    pub fn add_text(
-        &mut self,
-        ctx: &FormatCtx<'_, 'src>,
-        text: &'src str,
-        at: LineColumn,
-    ) -> Result {
+    pub fn add_text(&mut self, ctx: &FmtCtx<'_, 'src>, text: &'src str, at: LineColumn) -> Result {
         self.add_comments(ctx, at)?;
         self.add_raw_text(text);
         self.cur_offset += text.len();
         Ok(())
     }
 
-    pub fn add_sep(&mut self, ctx: &FormatCtx<'_, 'src>, at: LineColumn) -> Result {
+    pub fn add_sep(&mut self, ctx: &FmtCtx<'_, 'src>, at: LineColumn) -> Result {
         self.add_raw_sep(1);
         self.add_comments_with_sep(ctx, at, |b| b.add_raw_sep(1))
     }
@@ -353,7 +347,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     /// that number of newlines.
     pub fn add_aware_sep(
         &mut self,
-        ctx: &FormatCtx<'_, 'src>,
+        ctx: &FmtCtx<'_, 'src>,
         at: LineColumn,
         max_newlines: u8,
     ) -> Result {
@@ -391,12 +385,12 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     /// - adds trailing comments before the closing delimiter to the new block
     pub fn add_delimited_block<R>(
         &mut self,
-        ctx: &mut FormatCtx<'_, 'src>,
+        ctx: &mut FmtCtx<'_, 'src>,
         opening: impl Located,
         closing: impl Located,
         spacing: Option<Spacing>,
         chaining: ChainingRule,
-        f: impl FnOnce(&mut Self, &mut FormatCtx<'_, 'src>) -> Result<R>,
+        f: impl FnOnce(&mut Self, &mut FmtCtx<'_, 'src>) -> Result<R>,
     ) -> Result<R> {
         let closing = closing.loc();
         self.add_source(ctx, opening)?;
@@ -411,19 +405,19 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     /// - adds a space to the current block before the opening delimiter
     pub fn add_delimited_block_with_space<R>(
         &mut self,
-        ctx: &mut FormatCtx<'_, 'src>,
+        ctx: &mut FmtCtx<'_, 'src>,
         opening: impl Located,
         closing: impl Located,
         spacing: Option<Spacing>,
         chaining: ChainingRule,
-        f: impl FnOnce(&mut Self, &mut FormatCtx<'_, 'src>) -> Result<R>,
+        f: impl FnOnce(&mut Self, &mut FmtCtx<'_, 'src>) -> Result<R>,
     ) -> Result<R> {
         let opening = opening.loc();
         self.add_space(ctx, opening.start)?;
         self.add_delimited_block(ctx, opening, closing, spacing, chaining, f)
     }
 
-    pub fn add_source(&mut self, ctx: &FormatCtx<'_, 'src>, at: impl Located) -> Result {
+    pub fn add_source(&mut self, ctx: &FmtCtx<'_, 'src>, at: impl Located) -> Result {
         let loc = at.loc();
         let text = ctx.source_code(loc).context("failed to get a token's source code")?;
         self.add_text(ctx, text, loc.start)
@@ -436,7 +430,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     /// block.add_source(ctx, loc)?;
     /// ```
     /// but does so more concisely
-    pub fn add_source_with_space(&mut self, ctx: &FormatCtx<'_, 'src>, at: impl Located) -> Result {
+    pub fn add_source_with_space(&mut self, ctx: &FmtCtx<'_, 'src>, at: impl Located) -> Result {
         let loc = at.loc();
         self.add_space(ctx, loc.start)?;
         self.add_source(ctx, loc)
@@ -444,7 +438,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
 
     pub fn add_source_iter(
         &mut self,
-        ctx: &FormatCtx<'_, 'src>,
+        ctx: &FmtCtx<'_, 'src>,
         iter: impl IntoIterator<Item = impl Located>,
     ) -> Result {
         for obj in iter {
@@ -455,7 +449,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
 
     pub fn add_source_punctuated<T, P>(
         &mut self,
-        ctx: &FormatCtx<'_, 'src>,
+        ctx: &FmtCtx<'_, 'src>,
         iter: &Punctuated<T, P>,
     ) -> Result
     where
@@ -470,7 +464,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         Ok(())
     }
 
-    fn force_breaking(&mut self, ctx: &FormatCtx<'_, 'src>, indent: usize) {
+    fn force_breaking(&mut self, ctx: &FmtCtx<'_, 'src>, indent: usize) {
         self.spacing = None;
         self.width = 0;
         let mut offset = 0;
@@ -529,12 +523,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     }
 
     /// the returned boolean indicates whether the block was broken or not
-    fn determine_breaking(
-        &mut self,
-        ctx: &FormatCtx<'_, 'src>,
-        offset: usize,
-        indent: usize,
-    ) -> bool {
+    fn determine_breaking(&mut self, ctx: &FmtCtx<'_, 'src>, offset: usize, indent: usize) -> bool {
         let Some(spacing) = self.spacing else {
             self.force_breaking(ctx, indent);
             return true;
@@ -613,7 +602,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     }
 }
 
-pub struct FormatCtx<'fmt, 'src> {
+pub struct FmtCtx<'fmt, 'src> {
     pub config: &'fmt Config,
     /// buffer for tokens stored in `FmtBlock`s
     alloc: &'fmt Bump,
@@ -633,7 +622,7 @@ pub struct FormatCtx<'fmt, 'src> {
     cur_pos: LineColumn,
 }
 
-impl<'fmt, 'src: 'fmt> Visit<'_> for FormatCtx<'fmt, 'src> {
+impl<'fmt, 'src: 'fmt> Visit<'_> for FmtCtx<'fmt, 'src> {
     fn visit_item(&mut self, i: &'_ Item) {
         let attrs = match i {
             Item::Const(x) => &x.attrs,
@@ -695,7 +684,7 @@ impl<'fmt, 'src: 'fmt> Visit<'_> for FormatCtx<'fmt, 'src> {
                 return Ok(None);
             }
 
-            let html = match parse2_with_ctx::<Html>(i.tokens.clone(), self.config.yew.ext) {
+            let html = match self.config.yew.html_flavor.parse_root(i.tokens.clone()) {
                 Ok(html) => html,
                 Err(e) => {
                     let span = e.span();
@@ -737,7 +726,7 @@ impl Formatter {
         self.output.clear();
         self.offsets.clear();
         self.tokens_buf.reset();
-        let mut ctx = FormatCtx {
+        let mut ctx = FmtCtx {
             alloc: &self.tokens_buf,
             config: &self.config,
             offsets: &mut self.offsets,
@@ -757,7 +746,7 @@ impl Formatter {
     }
 }
 
-impl<'fmt, 'src> FormatCtx<'fmt, 'src> {
+impl<'fmt, 'src> FmtCtx<'fmt, 'src> {
     fn pos_to_byte_offset(&self, LineColumn { line, column }: LineColumn) -> Result<usize> {
         let line_start = *self
             .offsets

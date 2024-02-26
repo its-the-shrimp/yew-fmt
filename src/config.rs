@@ -1,4 +1,7 @@
-use crate::utils::{Result, StrExt};
+use crate::{
+    html::HtmlFlavor,
+    utils::{Result, StrExt},
+};
 use anyhow::{anyhow, bail, Context};
 use dirs::{config_dir, home_dir};
 use serde::{Deserialize, Deserializer};
@@ -19,7 +22,7 @@ pub struct YewConfig {
     pub unwrap_literal_prop_values: bool,
     pub use_prop_init_shorthand: bool,
     pub self_close_elements: bool,
-    pub ext: bool,
+    pub html_flavor: HtmlFlavor,
     pub unknown: HashMap<String, Unknown>,
 }
 
@@ -60,14 +63,6 @@ pub enum UseSmallHeuristics {
     Off,
     Default,
     Max,
-}
-
-/// Only present in [`RawConfigYew`] and not in [`YewConfig`] to not overcomplicate
-/// the formatter impl ahead of time
-#[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
-pub enum HtmlFlavor {
-    Base,
-    Ext,
 }
 
 fn parse_usize(src: &str) -> Result<usize, ParseIntError> {
@@ -181,8 +176,8 @@ impl Config {
                     .unwrap_or(false),
                 self_close_elements: raw.yew.self_close_elements
                     .unwrap_or(true),
-                ext: raw.yew.html_flavor
-                    .map_or(false, |f| f == HtmlFlavor::Ext),
+                html_flavor: raw.yew.html_flavor
+                    .unwrap_or(HtmlFlavor::Base),
                 unknown: raw.yew.unknown,
             },
         })

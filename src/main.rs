@@ -21,7 +21,7 @@ use std::{
 };
 use utils::{read_into, write_with_backup, KVPairs, Result};
 
-fn parse_rustfmt_output<'src>(src: &'src str) -> Result<HashMap<&'src str, &'src str>> {
+fn parse_rustfmt_output(src: &str) -> Result<HashMap<&str, &str>> {
     fn path_like(src: &str) -> bool {
         let Some(src) = src.strip_suffix(':').filter(|x| !x.starts_with("//")) else {
             return false;
@@ -33,7 +33,7 @@ fn parse_rustfmt_output<'src>(src: &'src str) -> Result<HashMap<&'src str, &'src
     }
 
     let mut res = HashMap::with_capacity(0);
-    let mut prev_entry: Option<&'src str> = None;
+    let mut prev_entry: Option<&str> = None;
     for l in src.lines() {
         if path_like(l) {
             if let Some(name) = prev_entry.as_mut() {
