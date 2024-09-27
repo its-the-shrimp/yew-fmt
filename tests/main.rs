@@ -79,11 +79,6 @@ fn issue_17() {
 }
 
 #[test]
-fn issue_19() {
-    cmp("tests/samples/issue_19")
-}
-
-#[test]
 fn issue_2() {
     cmp("tests/samples/issue_2")
 }
@@ -116,6 +111,11 @@ fn issue_8() {
 #[test]
 fn issue_9() {
     cmp("tests/samples/issue_9")
+}
+
+#[test]
+fn match_arms_on_multiple_lines() {
+    cmp("tests/samples/match_arms_on_multiple_lines")
 }
 
 #[test]
