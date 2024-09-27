@@ -8,7 +8,6 @@ use codespan_reporting::files::SimpleFile;
 use codespan_reporting::term;
 use codespan_reporting::term::termcolor::WriteColor;
 use proc_macro2::LineColumn;
-use std::cmp::min;
 use std::mem::{replace, take};
 use std::vec::Vec as StdVec;
 use syn::punctuated::Punctuated;
@@ -343,27 +342,26 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     }
 
     /// Scans the source code from `at` until the first non-whitespace character, counts the number
-    /// of newlines in that interval, confines that to `max_newlines` and adds a separator with
-    /// that number of newlines.
+    /// of newlines in that interval, confines that to the provided range and adds a
+    /// separator with that number of newlines.
     pub fn add_aware_sep(
         &mut self,
         ctx: &FmtCtx<'_, 'src>,
         at: LineColumn,
-        max_newlines: u8,
+        min_n_newlines: u8,
+        max_n_newlines: u8,
     ) -> Result {
-        let start = ctx.pos_to_byte_offset(at)?;
+        let src_start = ctx.pos_to_byte_offset(at)?;
         let n_newlines = ctx
             .input
-            .get(start..)
-            .with_context(|| format!("invalid byte offset: {start}"))?
+            .get(src_start..)
+            .with_context(|| format!("invalid byte offset: {src_start}"))?
             .chars()
             .take_while(char::is_ascii_whitespace)
             .filter(|&c| c == '\n')
             .count();
-        if n_newlines > 0 {
-            self.add_raw_sep(min(max_newlines, n_newlines.try_into()?));
-            self.add_comments_with_sep(ctx, at, |b| b.add_raw_sep(1))?;
-        }
+        self.add_raw_sep(u8::try_from(n_newlines)?.clamp(min_n_newlines, max_n_newlines));
+        self.add_comments_with_sep(ctx, at, |b| b.add_raw_sep(1))?;
         Ok(())
     }
 

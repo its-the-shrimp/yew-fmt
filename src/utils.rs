@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use proc_macro2::{TokenTree, Ident, TokenStream};
+use proc_macro2::{Ident, TokenStream, TokenTree};
 use quote::ToTokens;
 use std::{
     fs::{write, File},
@@ -8,7 +8,11 @@ use std::{
     path::Path,
     str::FromStr,
 };
-use syn::{buffer::Cursor, parse::{Parse, ParseStream}, ext::IdentExt};
+use syn::{
+    buffer::Cursor,
+    ext::IdentExt,
+    parse::{Parse, ParseStream},
+};
 
 pub type Result<T = (), E = anyhow::Error> = std::result::Result<T, E>;
 
@@ -17,8 +21,6 @@ pub trait StrExt {
     fn last_line_len(&self) -> Option<usize>;
     /// Unchecked version of `split_at`, caller must ensure that `self.is_char_boundary(mid)`
     unsafe fn split_at_unchecked(&self, mid: usize) -> (&str, &str);
-    /// Non-panicking version of `split_at`
-    fn try_split_at(&self, mid: usize) -> Option<(&str, &str)>;
 }
 
 impl StrExt for str {
@@ -28,13 +30,6 @@ impl StrExt for str {
 
     unsafe fn split_at_unchecked(&self, mid: usize) -> (&str, &str) {
         (self.get_unchecked(..mid), self.get_unchecked(mid..))
-    }
-
-    fn try_split_at(&self, mid: usize) -> Option<(&str, &str)> {
-        self.is_char_boundary(mid).then(|| unsafe {
-            // SAFETY: just checked that `mid` is on a char boundary.
-            (self.get_unchecked(..mid), self.get_unchecked(mid..))
-        })
     }
 }
 

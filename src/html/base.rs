@@ -2,7 +2,7 @@ use crate::{
     config::UseSmallHeuristics,
     formatter::{ChainingRule, FmtBlock, FmtCtx, Format, Located, Location, Spacing},
     html::HtmlFlavorSpec,
-    utils::{AnyIdent, default, OptionExt, Result},
+    utils::{default, AnyIdent, OptionExt, Result},
 };
 use anyhow::Context;
 use proc_macro2::{Delimiter, LineColumn, TokenStream, TokenTree};

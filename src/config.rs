@@ -1,10 +1,7 @@
-use crate::{
-    html::HtmlFlavor,
-    utils::{Result, StrExt},
-};
+use crate::{html::HtmlFlavor, utils::Result};
 use anyhow::{anyhow, bail, Context};
 use dirs::{config_dir, home_dir};
-use serde::{Deserialize, Deserializer};
+use serde::{de::IgnoredAny, Deserialize};
 use std::{
     collections::HashMap, env::current_dir, fs::read_to_string, io, num::ParseIntError, path::Path,
 };
@@ -23,7 +20,7 @@ pub struct YewConfig {
     pub use_prop_init_shorthand: bool,
     pub self_close_elements: bool,
     pub html_flavor: HtmlFlavor,
-    pub unknown: HashMap<String, Unknown>,
+    pub unknown: HashMap<String, IgnoredAny>,
 }
 
 #[derive(Deserialize)]
@@ -45,17 +42,7 @@ struct RawConfigYew {
     self_close_elements: Option<bool>,
     html_flavor: Option<HtmlFlavor>,
     #[serde(flatten)]
-    unknown: HashMap<String, Unknown>,
-}
-
-/// exists to avoid any handling of the values of unknown keys
-#[derive(Clone, Copy)]
-pub struct Unknown;
-
-impl<'de> Deserialize<'de> for Unknown {
-    fn deserialize<D: Deserializer<'de>>(_: D) -> Result<Self, D::Error> {
-        Ok(Self)
-    }
+    unknown: HashMap<String, IgnoredAny>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -66,7 +53,7 @@ pub enum UseSmallHeuristics {
 }
 
 fn parse_usize(src: &str) -> Result<usize, ParseIntError> {
-    let (base, src) = match src.try_split_at(2) {
+    let (base, src) = match src.split_at_checked(2) {
         Some(("0x", rest)) => (0x10, rest),
         Some(("0b", rest)) => (0b10, rest),
         Some(("0o", rest)) => (0o10, rest),
@@ -137,7 +124,7 @@ impl Config {
                         }
                     )+
                     k => if let Some(k) = k.strip_prefix("yew.") {
-                        $cfg.yew.unknown.insert(k.to_owned(), Unknown);
+                        $cfg.yew.unknown.insert(k.to_owned(), IgnoredAny);
                     }
                 }
             }};

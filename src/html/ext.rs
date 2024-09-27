@@ -299,7 +299,7 @@ impl Format for HtmlMatch {
                         block.add_text(ctx, ",", at)?;
                         LineColumn { line: at.line, column: at.column + 1 }
                     };
-                    block.add_aware_sep(ctx, sep_at, 2)?;
+                    block.add_aware_sep(ctx, sep_at, 1, 2)?;
                 }
                 Ok(())
             },

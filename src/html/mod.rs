@@ -1,7 +1,10 @@
 pub mod base;
 pub mod ext;
 
-use crate::{formatter::{FmtBlock, FmtCtx, Format, Located, Spacing}, utils::Result};
+use crate::{
+    formatter::{FmtBlock, FmtCtx, Format, Located, Spacing},
+    utils::Result,
+};
 use proc_macro2::TokenStream;
 use serde::Deserialize;
 use syn::{parse::Parse, parse2};
