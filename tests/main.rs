@@ -19,6 +19,11 @@ fn breaking_propagated() {
 }
 
 #[test]
+fn comments_in_empty_macro() {
+    cmp("tests/samples/comments_in_empty_macro")
+}
+
+#[test]
 fn elements_broken_up() {
     cmp("tests/samples/elements_broken_up")
 }

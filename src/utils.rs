@@ -93,7 +93,7 @@ pub struct WithPrevMut<'slice, T> {
     index: usize,
 }
 
-impl<'slice, T> WithPrevMut<'slice, T> {
+impl<T> WithPrevMut<'_, T> {
     pub fn next(&mut self) -> Option<(&mut T, &mut [T])> {
         // Safety: if the slice is exhausted, the function will always return before reaching
         // `.unwrap_unchecked()`

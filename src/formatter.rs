@@ -37,7 +37,7 @@ fn add_last_line_len(prev: usize, new: &str) -> usize {
     new.last_line_len().unwrap_or(new.len() + prev)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum Comment<'src> {
     /// the initial `//` and the newline are not included
     Line(&'src str),
@@ -673,39 +673,39 @@ impl<'fmt, 'src: 'fmt> Visit<'_> for FmtCtx<'fmt, 'src> {
             };
             let span = i.delimiter.span();
             let (opening_span, closing_span) = (span.open(), span.close());
+            let (html_start, html_end) = (opening_span.end(), closing_span.start());
             self.print_source(opening_span.start())?;
 
-            let html_start = opening_span.end();
-            if i.tokens.is_empty() {
-                self.print_text(opening, html_start)?;
-                self.print_text(closing, closing_span.end())?;
-                return Ok(None);
-            }
-
-            let html = match self.config.yew.html_flavor.parse_root(i.tokens.clone()) {
-                Ok(html) => html,
-                Err(e) => {
-                    let span = e.span();
-                    let start = self.pos_to_byte_offset(span.start())?;
-                    let end = self.pos_to_byte_offset(span.end())?;
-                    return Ok(Some(
-                        Diagnostic::error()
-                            .with_message(e.to_string())
-                            .with_labels(vec![Label::primary((), start..end)]),
-                    ));
-                }
-            };
-            let mut block = FmtBlock::new(
-                self.alloc,
-                Some(root_spacing),
-                ChainingRule::Off,
-                self.pos_to_byte_offset(html_start)?,
-            );
-            html.format(&mut block, self)?;
-
             self.print_text(opening, html_start)?;
-            self.print_fmt_block(block, closing_span.start())?;
+            if i.tokens.is_empty() {
+                self.print_source(html_end)?;
+            } else {
+                let mut block = FmtBlock::new(
+                    self.alloc,
+                    Some(root_spacing),
+                    ChainingRule::Off,
+                    self.pos_to_byte_offset(html_start)?,
+                );
+
+                let html = match self.config.yew.html_flavor.parse_root(i.tokens.clone()) {
+                    Ok(html) => html,
+                    Err(e) => {
+                        let span = e.span();
+                        let start = self.pos_to_byte_offset(span.start())?;
+                        let end = self.pos_to_byte_offset(span.end())?;
+                        return Ok(Some(
+                            Diagnostic::error()
+                                .with_message(e.to_string())
+                                .with_labels(vec![Label::primary((), start..end)]),
+                        ));
+                    }
+                };
+                html.format(&mut block, self)?;
+
+                self.print_fmt_block(block, html_end)?;
+            }
             self.print_text(closing, closing_span.end())?;
+
             Ok(None)
         })();
     }
@@ -874,7 +874,7 @@ pub struct FormatResult<'fmt, 'src> {
     output: Result<&'fmt str, Diagnostic<()>>,
 }
 
-impl<'fmt, 'src> FormatResult<'fmt, 'src> {
+impl<'fmt> FormatResult<'fmt, '_> {
     /// if the result is an error, write it into stderr, if it's successfully formatted code,
     /// return it
     pub fn emit_error(self, writer: &mut dyn WriteColor) -> Result<Option<&'fmt str>> {
