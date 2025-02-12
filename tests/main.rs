@@ -34,6 +34,11 @@ fn for_block() {
 }
 
 #[test]
+fn hard_tabs() {
+    cmp("tests/samples/hard_tabs")
+}
+
+#[test]
 fn html_for() {
     cmp("tests/samples/html_for")
 }

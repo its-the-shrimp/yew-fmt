@@ -8,6 +8,7 @@ use std::{
 
 #[derive(Clone)]
 pub struct Config {
+    pub hard_tabs: bool,
     pub tab_spaces: usize,
     pub yew: YewConfig,
 }
@@ -25,10 +26,13 @@ pub struct YewConfig {
 
 #[derive(Deserialize)]
 struct RawConfig {
-    tab_spaces: Option<usize>,
     max_width: Option<usize>,
     use_field_init_shorthand: Option<bool>,
     use_small_heuristics: Option<UseSmallHeuristics>,
+    // The fields above are only needed as default values for the respective `yew.` values,
+    // so they don't remain in the parsed `Config`
+    hard_tabs: Option<bool>,
+    tab_spaces: Option<usize>,
     #[serde(default)]
     yew: RawConfigYew,
 }
@@ -133,6 +137,7 @@ impl Config {
         let mut raw: RawConfig = basic_toml::from_str(src)?;
         for (key, value) in ext {
             parse_field!(key.as_ref(), value.as_ref(), raw.{
+                hard_tabs: bool,
                 tab_spaces: usize,
                 max_width: usize,
                 use_field_init_shorthand: bool,
@@ -147,6 +152,8 @@ impl Config {
         }
 
         Ok(Self {
+            hard_tabs: raw.hard_tabs
+                .unwrap_or(false),
             tab_spaces: raw.tab_spaces
                 .unwrap_or(4),
             yew: YewConfig {
@@ -228,5 +235,27 @@ impl Config {
         return_parsed_if_file_exists!(&global);
 
         Self::parse("", additional)
+    }
+
+    pub fn print_break(&self, out: &mut String, n_newlines: u8, mut indent: usize) {
+        if n_newlines == 0 {
+            return;
+        }
+        out.reserve(indent + 1);
+        for _ in 0..n_newlines {
+            out.push('\n')
+        }
+
+        if self.hard_tabs {
+            let n_tabs = indent / self.tab_spaces;
+            for _ in 0..n_tabs {
+                out.push('\t');
+            }
+            indent %= self.tab_spaces;
+        }
+
+        for _ in 0..indent {
+            out.push(' ');
+        }
     }
 }

@@ -18,19 +18,6 @@ fn is_skipped(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|attr| attr.path().segments.iter().map(|x| &x.ident).eq(["rustfmt", "skip"]))
 }
 
-fn print_break(out: &mut String, n_newlines: u8, indent: usize) {
-    if n_newlines == 0 {
-        return;
-    }
-    out.reserve(indent + 1);
-    for _ in 0..n_newlines {
-        out.push('\n')
-    }
-    for _ in 0..indent {
-        out.push(' ')
-    }
-}
-
 /// if `new` is 1 line, returns its length added to `prev`, otherwise returns the length of the
 /// last line of `new`.
 fn add_last_line_len(prev: usize, new: &str) -> usize {
@@ -271,7 +258,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     }
 
     fn add_raw_sep(&mut self, n_newlines: u8) {
-        self.width += self.spacing.map_or(false, |s| s.between) as usize;
+        self.width += self.spacing.is_some_and(|s| s.between) as usize;
         self.tokens.push(FmtToken::Sep(n_newlines))
     }
 
@@ -314,7 +301,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             }
         }
 
-        if comment_added && self.spacing.map_or(false, |s| s.between) {
+        if comment_added && self.spacing.is_some_and(|s| s.between) {
             sep(self);
         }
         Ok(())
@@ -556,7 +543,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
                 if let Sep::Newline = sep {
                     out.push_str("//");
                     out.push_str(comment);
-                    print_break(out, 1, indent)
+                    cfg.print_break(out, 1, indent)
                 } else {
                     out.push_str("/*");
                     out.push_str(comment);
@@ -566,13 +553,13 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             FmtToken::Sep(n_newlines) => match sep {
                 Sep::None => (),
                 Sep::Space => out.push(' '),
-                Sep::Newline => print_break(out, *n_newlines, indent),
+                Sep::Newline => cfg.print_break(out, *n_newlines, indent),
             },
             FmtToken::Block(block) => block.print(indent, cfg, out),
         };
 
         if self.tokens.is_empty() {
-            if self.spacing.map_or(false, |s| s.before && s.after) {
+            if self.spacing.is_some_and(|s| s.before && s.after) {
                 out.push(' ');
             }
         } else if let Some(spacing) = self.spacing {
@@ -587,14 +574,14 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             }
         } else {
             let new_indent = indent + cfg.tab_spaces;
-            print_break(out, 1, new_indent);
+            cfg.print_break(out, 1, new_indent);
             for token in &self.tokens {
                 print_token(token, out, new_indent, Sep::Newline);
             }
             if let Some(FmtToken::LineComment(_)) = self.tokens.last() {
-                out.truncate(out.len() - 4)
+                out.truncate(out.len() - 4);
             } else {
-                print_break(out, 1, indent)
+                cfg.print_break(out, 1, indent);
             }
         }
     }
@@ -780,9 +767,9 @@ impl<'fmt, 'src> FmtCtx<'fmt, 'src> {
             .get(line - 1)
             .with_context(|| format!("line {line} doesn't exist in the source file"))?;
         let line = unsafe { self.input.get_unchecked(start..) };
-        for (i, ch) in line.char_indices() {
+        for (off, ch) in line.char_visual_offsets(self.config.tab_spaces) {
             match ch {
-                ' ' => {
+                ' ' | '\t' => {
                     state = match state {
                         State::Space => continue,
                         State::CommentStart => State::Space,
@@ -808,8 +795,8 @@ impl<'fmt, 'src> FmtCtx<'fmt, 'src> {
                 }
                 '\n' => bail!("line {line} of the source file is empty"),
                 _ => match state {
-                    State::Space => return Ok(i),
-                    State::CommentStart => return Ok(i - 1),
+                    State::Space => return Ok(off),
+                    State::CommentStart => return Ok(off - 1),
                     State::Comment => continue,
                     State::CommentEnd => continue,
                 },
@@ -843,7 +830,6 @@ impl<'fmt, 'src> FmtCtx<'fmt, 'src> {
     fn print_fmt_block(&mut self, mut block: FmtBlock<'fmt, 'src>, end: LineColumn) -> Result {
         let indent = self.line_indent(self.cur_pos.line)?;
         block.determine_breaking(self, self.cur_pos.column - indent, indent);
-        //panic!("{block:#?}");
         block.print(indent, self.config, self.output);
         self.cur_pos = end;
         let off = self.pos_to_byte_offset(end)?;
