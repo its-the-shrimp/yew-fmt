@@ -9,6 +9,7 @@ use codespan_reporting::term;
 use codespan_reporting::term::termcolor::WriteColor;
 use proc_macro2::LineColumn;
 use std::mem::{replace, take};
+use std::ops::BitOr;
 use std::vec::Vec as StdVec;
 use syn::punctuated::Punctuated;
 use syn::{spanned::Spanned, visit::Visit, Macro};
@@ -95,10 +96,16 @@ impl<'src> Iterator for CommentParser<'src> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Location {
     pub start: LineColumn,
     pub end: LineColumn,
+}
+
+impl Location {
+    pub fn zero_width(point: LineColumn) -> Self {
+        Self { start: point, end: point }
+    }
 }
 
 /// Represents an object that has an associated location in the source
@@ -186,16 +193,28 @@ pub struct Spacing {
     pub after: bool,
 }
 
+impl BitOr for Spacing {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self {
+            before: self.before | rhs.before,
+            between: self.between | rhs.between,
+            after: self.after | rhs.after,
+        }
+    }
+}
+
 impl Spacing {
     pub const AROUND: Self = Self { before: true, between: false, after: true };
 }
 
 /// Chains are sequences of formatting blocks that are all broken if one of them is broken; in a
 /// sequence of formatting blocks, a chain will have the following shape:
-/// `[..., Off, Full, Forward, ..., Full, End, Off, ...]`
+/// `[..., Off, Full, ..., Full, End, Off, ...]`
 /// where the words are the names of the variants of [`ChainingRule`].
 /// A chain starts from a [`ChainingRule::On`] variant but ends with a [`ChainingRule::End`]; this
-/// is done to make the chains declare their end on their own without having to add an addition
+/// is done to make the chains declare their end on their own without having to add an additional
 /// variant to [`FmtToken`], and to also avoid the possibility of 2 unrelated chains getting
 /// misinterpreted as 1.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -317,6 +336,9 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
     }
 
     pub fn add_text(&mut self, ctx: &FmtCtx<'_, 'src>, text: &'src str, at: LineColumn) -> Result {
+        if text.is_empty() {
+            return Ok(());
+        }
         self.add_comments(ctx, at)?;
         self.add_raw_text(text);
         self.cur_offset += text.len();
@@ -365,7 +387,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         res
     }
 
-    /// same as `add_block` but also:
+    /// same as [`FmtBlock::add_block`] but also:
     /// - adds the delimiters at the provided source locations;
     /// - adds trailing comments before the closing delimiter to the new block
     pub fn add_delimited_block<R>(
@@ -447,6 +469,35 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
             self.add_source_iter(ctx, punct)?;
         }
         Ok(())
+    }
+
+    /// Assuming the block has only 1 token, a nested block, flatten that block & its metadata onto
+    /// `self`
+    pub fn flatten(&mut self) {
+        let token = self.tokens.drain(..).next();
+        debug_assert!(
+            self.tokens.is_empty(),
+            "the block must have only 1 token, the nested block\nextra tokens: {:#?}",
+            self.tokens,
+        );
+        let block = match token {
+            Some(FmtToken::Block(block)) => block,
+            _ if cfg!(debug_assertions) => {
+                unreachable!("the block must have a nested block as its 1st token");
+            }
+            Some(extra) => {
+                self.tokens.insert(0, extra);
+                return;
+            }
+            None => return,
+        };
+
+        self.spacing = match (self.spacing, block.spacing) {
+            (None, None) => None,
+            (None, Some(x)) | (Some(x), None) => Some(x),
+            (Some(x), Some(y)) => Some(x | y),
+        };
+        self.tokens = block.tokens;
     }
 
     fn force_breaking(&mut self, ctx: &FmtCtx<'_, 'src>, indent: usize) {

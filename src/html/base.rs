@@ -19,8 +19,6 @@ use syn::{
     Block, Expr, Lit, Stmt, Token, Type,
 };
 
-pub struct BaseHtmlFlavor;
-
 pub fn parse_children<T: Parse>(input: ParseStream) -> syn::Result<Vec<T>> {
     let mut res = vec![];
     while !(input.is_empty() || input.peek(Token![<]) && input.peek2(Token![/])) {
@@ -28,6 +26,32 @@ pub fn parse_children<T: Parse>(input: ParseStream) -> syn::Result<Vec<T>> {
     }
     Ok(res)
 }
+
+pub fn format_children<'src, F: HtmlFlavorSpec>(
+    block: &mut FmtBlock<'_, 'src>,
+    ctx: &mut FmtCtx<'_, 'src>,
+    opening: impl Located,
+    closing: impl Located,
+    had_props_block: bool,
+    children: &[F::Tree],
+) -> Result {
+    block.add_delimited_block(
+        ctx,
+        opening,
+        closing,
+        F::element_children_spacing(ctx, children),
+        if had_props_block { ChainingRule::End } else { ChainingRule::Off },
+        |block, ctx| {
+            for child in children {
+                child.format(block, ctx)?;
+                block.add_sep(ctx, child.end())?;
+            }
+            Ok(())
+        },
+    )
+}
+
+pub struct BaseHtmlFlavor;
 
 impl HtmlFlavorSpec for BaseHtmlFlavor {
     type Root = Html;
@@ -448,19 +472,13 @@ impl<F: HtmlFlavorSpec> Format for HtmlFragment<F> {
             key.format(block, ctx)?;
         }
 
-        block.add_delimited_block(
+        format_children::<F>(
+            block,
             ctx,
             self.gt_token,
             self.closing_lt_token,
-            F::element_children_spacing(ctx, &self.children),
-            ChainingRule::Off,
-            |block, ctx| {
-                for child in &self.children {
-                    child.format(block, ctx)?;
-                    block.add_sep(ctx, child.end())?;
-                }
-                Ok(())
-            },
+            false,
+            &self.children,
         )?;
 
         block.add_source(ctx, self.div_token)?;
@@ -487,20 +505,7 @@ impl<F: HtmlFlavorSpec> Format for HtmlDynamicElement<F> {
         })?;
 
         if let Some((gt, closing_lt, closing_at)) = closing_tag {
-            block.add_delimited_block(
-                ctx,
-                gt,
-                closing_lt,
-                F::element_children_spacing(ctx, &self.children),
-                ChainingRule::End,
-                |block, ctx| {
-                    for child in &self.children {
-                        child.format(block, ctx)?;
-                        block.add_sep(ctx, child.end())?;
-                    }
-                    Ok(())
-                },
-            )?;
+            format_children::<F>(block, ctx, gt, closing_lt, true, &self.children)?;
             block.add_source(ctx, self.div_token)?;
             block.add_source(ctx, closing_at)?;
             block.add_source(ctx, self.closing_gt_token)
@@ -538,19 +543,7 @@ impl<F: HtmlFlavorSpec> Format for HtmlLiteralElement<F> {
         )?;
 
         if let Some((gt, closing_lt, closing_name)) = closing_tag {
-            block.add_delimited_block(
-                ctx,
-                gt,
-                closing_lt,
-                F::element_children_spacing(ctx, &self.children),
-                ChainingRule::End,
-                |block, ctx| {
-                    Ok(for child in &self.children {
-                        child.format(block, ctx)?;
-                        block.add_sep(ctx, child.end())?;
-                    })
-                },
-            )?;
+            format_children::<F>(block, ctx, gt, closing_lt, true, &self.children)?;
             block.add_source(ctx, self.div_token)?;
             block.add_source_iter(ctx, closing_name.clone())?;
             block.add_source(ctx, self.closing_gt_token)

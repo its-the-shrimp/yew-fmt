@@ -1,10 +1,13 @@
 use crate::{
     config::UseSmallHeuristics,
     formatter::{ChainingRule, FmtBlock, FmtCtx, Format, Located, Location, Spacing},
-    html::base::{
-        block_children_spacing, parse_children, HtmlBlock, HtmlBlockContent, HtmlElement, HtmlIf,
+    html::{
+        base::{
+            block_children_spacing, format_children, parse_children, HtmlBlock, HtmlBlockContent,
+            HtmlElement, HtmlIf,
+        },
+        HtmlFlavorSpec,
     },
-    html::HtmlFlavorSpec,
     utils::{default, OptionExt, Result, TokenIter, TokenTreeExt},
 };
 use proc_macro2::LineColumn;
@@ -35,7 +38,7 @@ impl HtmlFlavorSpec for ExtHtmlFlavor {
 }
 
 pub enum Html {
-    Tree(HtmlTree),
+    Tree(Vec<HtmlTree>),
     Value(Box<HtmlBlockContent>),
 }
 
@@ -76,7 +79,7 @@ pub struct HtmlMatchArm {
     pub pat: Pat,
     pub guard: Option<(Token![if], Box<Expr>)>,
     pub fat_arrow_token: Token![=>],
-    pub body: Html,
+    pub body: HtmlTree,
 }
 
 pub struct HtmlLet(Local);
@@ -91,21 +94,28 @@ impl Parse for Html {
             TokenIter(cursor).take_while(|t| !t.is_ident("for")).any(|t| t.is_ident("in"))
         }
 
-        let cursor = input.cursor();
-        Ok(match HtmlTree::peek_html_type(cursor) {
-            Some(HtmlTreeKind::For) => {
-                if for_loop_like(cursor) {
-                    Self::Tree(HtmlTree::For(input.parse()?))
-                } else {
-                    Self::Value(HtmlBlockContent::Iterable(input.parse()?, input.parse()?).into())
+        let mut nodes = vec![];
+        while !input.is_empty() {
+            let cursor = input.cursor();
+            nodes.push(match HtmlTree::peek_html_type(cursor) {
+                Some(HtmlTreeKind::For) => {
+                    if for_loop_like(cursor) {
+                        HtmlTree::For(input.parse()?)
+                    } else {
+                        return Ok(Self::Value(
+                            HtmlBlockContent::Iterable(input.parse()?, input.parse()?).into(),
+                        ));
+                    }
                 }
-            }
-            Some(HtmlTreeKind::Match) => Self::Tree(HtmlTree::Match(input.parse()?)),
-            Some(HtmlTreeKind::If) => Self::Tree(HtmlTree::If(input.parse()?)),
-            Some(HtmlTreeKind::Block) => Self::Tree(HtmlTree::Block(input.parse()?)),
-            Some(HtmlTreeKind::Element) => Self::Tree(HtmlTree::Element(input.parse()?)),
-            None => Self::Value(input.parse()?),
-        })
+                Some(HtmlTreeKind::Match) => HtmlTree::Match(input.parse()?),
+                Some(HtmlTreeKind::If) => HtmlTree::If(input.parse()?),
+                Some(HtmlTreeKind::Block) => HtmlTree::Block(input.parse()?),
+                Some(HtmlTreeKind::Element) => HtmlTree::Element(input.parse()?),
+                None => return Ok(Self::Value(input.parse()?)),
+            })
+        }
+
+        Ok(Self::Tree(nodes))
     }
 }
 
@@ -236,8 +246,22 @@ impl HtmlLet {
 impl Format for Html {
     fn format<'src>(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FmtCtx<'_, 'src>) -> Result {
         match self {
-            Html::Tree(tree) => tree.format(block, ctx),
-            Html::Value(val) => val.format(block, ctx),
+            Self::Tree(trees) => {
+                let [Some(first), Some(last)] = [trees.first(), trees.last()] else {
+                    return Ok(());
+                };
+                format_children::<ExtHtmlFlavor>(
+                    block,
+                    ctx,
+                    Location::zero_width(first.start()),
+                    Location::zero_width(last.end()),
+                    false,
+                    trees,
+                )?;
+                block.flatten();
+                Ok(())
+            }
+            Self::Value(val) => val.format(block, ctx),
         }
     }
 }
@@ -345,21 +369,26 @@ impl Format for HtmlLet {
 impl Located for Html {
     fn start(&self) -> LineColumn {
         match self {
-            Self::Tree(tree) => tree.start(),
+            Self::Tree(tree) => {
+                tree.first().map_or(LineColumn { line: 1, column: 0 }, Located::start)
+            }
             Self::Value(val) => val.start(),
         }
     }
 
     fn end(&self) -> LineColumn {
         match self {
-            Self::Tree(tree) => tree.end(),
+            Self::Tree(tree) => tree.last().map_or(LineColumn { line: 1, column: 0 }, Located::end),
             Self::Value(val) => val.end(),
         }
     }
 
     fn loc(&self) -> Location {
         match self {
-            Self::Tree(tree) => tree.loc(),
+            Self::Tree(tree) => Location {
+                start: tree.first().map_or(LineColumn { line: 1, column: 0 }, Located::start),
+                end: tree.last().map_or(LineColumn { line: 1, column: 0 }, Located::end),
+            },
             Self::Value(val) => val.loc(),
         }
     }
