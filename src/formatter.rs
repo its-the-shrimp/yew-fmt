@@ -630,7 +630,12 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
                 print_token(token, out, new_indent, Sep::Newline);
             }
             if let Some(FmtToken::LineComment(_)) = self.tokens.last() {
-                out.truncate(out.len() - 4);
+                let extra_span = if cfg.hard_tabs {
+                    1
+                } else {
+                    cfg.tab_spaces
+                };
+                out.truncate(out.len() - extra_span);
             } else {
                 cfg.print_break(out, 1, indent);
             }
