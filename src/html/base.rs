@@ -519,7 +519,7 @@ impl<F: HtmlFlavorSpec> Format for HtmlDynamicElement<F> {
 impl<F: HtmlFlavorSpec> Format for HtmlLiteralElement<F> {
     fn format<'src>(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FmtCtx<'_, 'src>) -> Result {
         block.add_source(ctx, self.lt_token)?;
-        block.add_source_iter(ctx, self.name.clone())?;
+        block.add_source_spanned_by_iter(ctx, self.name.clone())?;
         let closing_tag = self
             .closing_tag
             .as_ref()
@@ -545,7 +545,7 @@ impl<F: HtmlFlavorSpec> Format for HtmlLiteralElement<F> {
         if let Some((gt, closing_lt, closing_name)) = closing_tag {
             format_children::<F>(block, ctx, gt, closing_lt, true, &self.children)?;
             block.add_source(ctx, self.div_token)?;
-            block.add_source_iter(ctx, closing_name.clone())?;
+            block.add_source_spanned_by_iter(ctx, closing_name.clone())?;
             block.add_source(ctx, self.closing_gt_token)
         } else {
             block.add_source(ctx, self.div_token)?;
@@ -556,7 +556,7 @@ impl<F: HtmlFlavorSpec> Format for HtmlLiteralElement<F> {
 
 impl Format for HtmlProp {
     fn format<'src>(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FmtCtx<'_, 'src>) -> Result {
-        block.add_source_iter(ctx, self.access_spec)?;
+        block.maybe_add_source(ctx, self.access_spec)?;
         match &self.kind {
             HtmlPropKind::Shortcut(brace, name) => {
                 block.add_source(ctx, brace.span.open())?;

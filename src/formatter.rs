@@ -443,15 +443,28 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         self.add_source(ctx, loc)
     }
 
-    pub fn add_source_iter(
+    pub fn maybe_add_source(
+        &mut self,
+        ctx: &FmtCtx<'_, 'src>,
+        obj: Option<impl Located>,
+    ) -> Result {
+        if let Some(obj) = obj {
+            self.add_source(ctx, obj)?;
+        }
+        Ok(())
+    }
+
+    pub fn add_source_spanned_by_iter(
         &mut self,
         ctx: &FmtCtx<'_, 'src>,
         iter: impl IntoIterator<Item = impl Located>,
     ) -> Result {
-        for obj in iter {
-            self.add_source(ctx, obj)?;
-        }
-        Ok(())
+        let mut iter = iter.into_iter();
+        let Some(first) = iter.next().map(|x| x.loc()) else {
+            return Ok(());
+        };
+        let last = iter.last().map_or(first, |x| x.loc());
+        self.add_source(ctx, Location { start: first.start, end: last.end })
     }
 
     pub fn add_source_punctuated<T, P>(
@@ -466,7 +479,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         for pair in iter.pairs() {
             let (value, punct) = pair.into_tuple();
             self.add_source(ctx, value)?;
-            self.add_source_iter(ctx, punct)?;
+            self.maybe_add_source(ctx, punct)?;
         }
         Ok(())
     }
