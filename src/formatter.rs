@@ -106,6 +106,20 @@ impl Location {
     pub fn zero_width(point: LineColumn) -> Self {
         Self { start: point, end: point }
     }
+
+    pub fn find_saturating(osnova: shrimple_parser::Location, igla: &str, stog: &str) -> Location {
+        Self {
+            start: osnova
+                .offset(shrimple_parser::Location::find_saturating(igla.as_ptr(), stog))
+                .into(),
+            end: osnova
+                .offset(shrimple_parser::Location::find_saturating(
+                    igla[igla.len()..].as_ptr(),
+                    stog,
+                ))
+                .into(),
+        }
+    }
 }
 
 /// Represents an object that has an associated location in the source
@@ -643,11 +657,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
                 print_token(token, out, new_indent, Sep::Newline);
             }
             if let Some(FmtToken::LineComment(_)) = self.tokens.last() {
-                let extra_span = if cfg.hard_tabs {
-                    1
-                } else {
-                    cfg.tab_spaces
-                };
+                let extra_span = if cfg.hard_tabs { 1 } else { cfg.tab_spaces };
                 out.truncate(out.len() - extra_span);
             } else {
                 cfg.print_break(out, 1, indent);

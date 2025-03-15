@@ -78,7 +78,7 @@ fn Comp() -> Html {
             x if x % 2 != 0 => <code>{ "That's odd" }</code>,
 
             // just to test it out
-            tab_id => <p style="color:red">{ format!("Invalid tab ID: {tab_id}") }</p>,
+            tab_id => <p style="color: red">{ format!("Invalid tab ID: {tab_id}") }</p>,
         }
     }
 }

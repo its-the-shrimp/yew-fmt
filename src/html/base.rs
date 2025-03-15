@@ -1,5 +1,6 @@
 use crate::{
     config::UseSmallHeuristics,
+    css::{is_inline_css_attr, StyleString},
     formatter::{ChainingRule, FmtBlock, FmtCtx, Format, Located, Location, Spacing},
     html::HtmlFlavorSpec,
     utils::{default, AnyIdent, OptionExt, Result},
@@ -126,7 +127,7 @@ pub struct HtmlLiteralElement<F: HtmlFlavorSpec> {
     pub lt_token: Token![<],
     pub name: TokenStream,
     pub props: Vec<HtmlProp>,
-    pub prop_base: Option<(Token![..], Expr)>,
+    pub prop_base: Option<Box<(Token![..], Expr)>>,
     pub children: Vec<F::Tree>,
     pub closing_tag: Option<(Token![>], Token![<], TokenStream)>,
     pub div_token: Token![/],
@@ -142,6 +143,7 @@ pub enum HtmlPropKind {
     Shortcut(Brace, Punctuated<AnyIdent, Token![-]>),
     Literal(Punctuated<AnyIdent, Token![-]>, Token![=], Lit),
     Block(Punctuated<AnyIdent, Token![-]>, Token![=], Block),
+    Style(Punctuated<AnyIdent, Token![-]>, Token![=], StyleString),
 }
 
 pub struct HtmlIf<F: HtmlFlavorSpec> {
@@ -242,7 +244,7 @@ impl<F: HtmlFlavorSpec> Parse for HtmlFragment<F> {
         let (key, gt_token) = if input.peek(Token![>]) {
             (None, input.parse()?)
         } else {
-            (Some(input.parse()?), input.parse()?)
+            (Some(HtmlProp::parse("", input)?), input.parse()?)
         };
 
         Ok(Self {
@@ -265,7 +267,7 @@ impl<F: HtmlFlavorSpec> Parse for HtmlDynamicElement<F> {
 
         let mut props = vec![];
         while input.cursor().punct().is_none() {
-            props.push(input.parse()?)
+            props.push(HtmlProp::parse("", input)?)
         }
 
         let (children, closing_tag, div_token) = if input.peek(Token![>]) {
@@ -311,13 +313,14 @@ impl<F: HtmlFlavorSpec> Parse for HtmlLiteralElement<F> {
 
         let lt_token = input.parse()?;
         let name = get_name(input)?;
+        let name_str = name.to_string();
 
         let mut props = vec![];
         while input.cursor().punct().is_none() {
-            props.push(input.parse()?)
+            props.push(HtmlProp::parse(&name_str, input)?)
         }
         let prop_base = if input.peek(Token![..]) {
-            Some((input.parse()?, parse2(prop_base_collector(input).collect())?))
+            Some((input.parse()?, parse2(prop_base_collector(input).collect())?).into())
         } else {
             None
         };
@@ -346,8 +349,8 @@ impl<F: HtmlFlavorSpec> Parse for HtmlLiteralElement<F> {
     }
 }
 
-impl Parse for HtmlProp {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
+impl HtmlProp {
+    pub fn parse(element: &str, input: ParseStream) -> syn::Result<Self> {
         let access_spec = input.parse().ok();
         let kind = if input.peek(Brace) {
             let inner;
@@ -358,6 +361,8 @@ impl Parse for HtmlProp {
             let eq_token = input.parse()?;
             if input.peek(Brace) {
                 HtmlPropKind::Block(name, eq_token, input.parse()?)
+            } else if is_inline_css_attr(element, &name.to_token_stream().to_string()) {
+                HtmlPropKind::Style(name, eq_token, input.parse()?)
             } else {
                 HtmlPropKind::Literal(name, eq_token, input.parse()?)
             }
@@ -533,7 +538,7 @@ impl<F: HtmlFlavorSpec> Format for HtmlLiteralElement<F> {
                     prop.format(block, ctx)?;
                     block.add_sep(ctx, prop.end())?;
                 }
-                if let Some((dotdot, prop_base)) = &self.prop_base {
+                if let Some((dotdot, prop_base)) = self.prop_base.as_deref() {
                     block.add_source(ctx, dotdot)?;
                     block.add_source(ctx, prop_base)?;
                     block.add_sep(ctx, prop_base.end())?;
@@ -563,11 +568,13 @@ impl Format for HtmlProp {
                 block.add_source_punctuated(ctx, name)?;
                 block.add_source(ctx, brace.span.close())
             }
+
             HtmlPropKind::Literal(name, eq, lit) => {
                 block.add_source_punctuated(ctx, name)?;
                 block.add_source(ctx, eq)?;
                 block.add_source(ctx, lit)
             }
+
             HtmlPropKind::Block(name, eq, expr) => match &*expr.stmts {
                 [Stmt::Expr(Expr::Path(p), None)]
                     if ctx.config.yew.use_prop_init_shorthand
@@ -587,6 +594,12 @@ impl Format for HtmlProp {
                     expr.format(block, ctx)
                 }
             },
+
+            HtmlPropKind::Style(name, eq, style) => {
+                block.add_source_punctuated(ctx, name)?;
+                block.add_source(ctx, eq)?;
+                style.format(block, ctx)
+            }
         }
     }
 }
@@ -787,7 +800,9 @@ impl Located for HtmlProp {
 
         match &self.kind {
             HtmlPropKind::Shortcut(brace, _) => brace.span.open().start(),
-            HtmlPropKind::Literal(name, ..) | HtmlPropKind::Block(name, ..) => unsafe {
+            HtmlPropKind::Literal(name, ..)
+            | HtmlPropKind::Block(name, ..)
+            | HtmlPropKind::Style(name, ..) => unsafe {
                 // Safety: the name of the prop is guaranteed to be non-empty by
                 // `Punctuated::parse_terminated(_nonempty)`
                 name.first().unwrap_unchecked().span().start()
@@ -798,8 +813,9 @@ impl Located for HtmlProp {
     fn end(&self) -> LineColumn {
         match &self.kind {
             HtmlPropKind::Shortcut(brace, _) => brace.span.close().end(),
-            HtmlPropKind::Literal(_, _, lit) => lit.span().end(),
-            HtmlPropKind::Block(_, _, expr) => expr.brace_token.span.close().end(),
+            HtmlPropKind::Literal(.., lit) => lit.span().end(),
+            HtmlPropKind::Block(.., expr) => expr.brace_token.span.close().end(),
+            HtmlPropKind::Style(.., style) => style.end(),
         }
     }
 }

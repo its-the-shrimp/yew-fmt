@@ -139,6 +139,11 @@ fn issue_9() {
 }
 
 #[test]
+fn long_css() {
+    cmp("tests/samples/long_css")
+}
+
+#[test]
 fn match_arms_on_multiple_lines() {
     cmp("tests/samples/match_arms_on_multiple_lines")
 }

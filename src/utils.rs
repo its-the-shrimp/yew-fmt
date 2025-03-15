@@ -188,6 +188,7 @@ impl Deref for AnyIdent {
         &self.0
     }
 }
+
 /// like `std::fs::write`, but will also create a `.bk` file
 pub fn write_with_backup(filename: &str, new_text: impl AsRef<[u8]>) -> Result {
     let new_text = new_text.as_ref();

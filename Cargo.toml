@@ -21,6 +21,8 @@ basic-toml = "0.1.0"
 serde = { version = "1", features = ["derive"] }
 dirs = "5"
 bumpalo = { version = "3", features = ["collections"] }
+shrimple-parser = { version = "0.0.12", features = ["either", "proc-macro2"] }
+either = "1"
 
 [build-dependencies]
 anyhow = "1"
@@ -34,7 +36,6 @@ unit_arg = "allow"
 single_char_lifetime_names = "warn"
 deref_by_slicing = "warn"
 derive_partial_eq_without_eq = "warn"
-expect_used = "warn"
 unwrap_used = "warn"
 explicit_iter_loop = "warn"
 explicit_into_iter_loop = "warn"
