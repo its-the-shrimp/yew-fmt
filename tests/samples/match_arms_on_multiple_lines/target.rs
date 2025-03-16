@@ -6,8 +6,8 @@ use yew::prelude::*;
 fn Comp() -> Html {
     html! {
         match x {
-            A::B => { html!{} },
-            A::C => { html!{} },
+            A::B => {},
+            A::C => {},
         }
     }
 }

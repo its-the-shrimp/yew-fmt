@@ -182,7 +182,9 @@ pub fn visit_base_html_literal_element<V: Visitor>(
 }
 
 pub fn visit_html_block<V: Visitor>(visitor: &mut V, block: &mut base::HtmlBlock) {
-    visitor.visit_html_block_content(&mut block.content);
+    if let Some(content) = &mut block.content {
+        visitor.visit_html_block_content(content);
+    }
 }
 
 pub fn visit_base_html_if<V: Visitor>(visitor: &mut V, if_stmt: &mut base::HtmlIf<BaseHtmlFlavor>) {

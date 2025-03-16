@@ -1,3 +1,10 @@
+//! # Warning
+//! This parser doesn't simply abide by the rules of Yew HTML, in its base flavor it's a
+//! bit more general in order to not duplicate the code too much to handle the 2 HTML flavors.
+//!
+//! This is OK because yew-fmt only kicks in after calling to rustfmt, which will assert that
+//! the syntax is exactly what it's supposed to be.
+
 pub mod base;
 pub mod ext;
 pub mod visitor;

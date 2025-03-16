@@ -9,7 +9,7 @@ use {
     anyhow::Context,
     proc_macro2::{Delimiter, LineColumn, TokenStream, TokenTree},
     quote::ToTokens,
-    std::iter::from_fn,
+    std::{iter::from_fn, ops::Not},
     syn::{
         braced,
         buffer::Cursor,
@@ -90,7 +90,7 @@ pub enum HtmlTree {
 
 pub struct HtmlBlock {
     pub brace: Brace,
-    pub content: HtmlBlockContent,
+    pub content: Option<HtmlBlockContent>,
 }
 
 pub enum HtmlBlockContent {
@@ -195,7 +195,12 @@ impl Parse for HtmlBlock {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let content;
         let brace = braced!(content in input);
-        HtmlBlockContent::parse(&content).map(|content| Self { content, brace })
+        content
+            .is_empty()
+            .not()
+            .then(|| HtmlBlockContent::parse(&content))
+            .transpose()
+            .map(|content| Self { content, brace })
     }
 }
 
@@ -620,8 +625,12 @@ impl Format for Block {
 impl Format for HtmlBlock {
     fn format<'src>(&self, block: &mut FmtBlock<'_, 'src>, ctx: &mut FmtCtx<'_, 'src>) -> Result {
         block.add_source(ctx, self.brace.span.open())?;
-        self.content.format_with_space(block, ctx)?;
-        block.add_source_with_space(ctx, self.brace.span.close())
+        let closing_brace_span = self.brace.span.close();
+        if let Some(content) = &self.content {
+            content.format_with_space(block, ctx)?;
+            block.add_space(ctx, closing_brace_span.start())?;
+        }
+        block.add_source(ctx, closing_brace_span)
     }
 }
 
