@@ -3,7 +3,14 @@
 
 use {
     crate::{
+        config::Config,
         formatter::{ChainingRule, FmtBlock, FmtCtx, Format, Located, Location, Spacing},
+        html::{
+            base::{BaseHtmlFlavor, HtmlLiteralElement, HtmlProp, HtmlPropKind},
+            ext::ExtHtmlFlavor,
+            visitor::{self, Visitor},
+            Html,
+        },
         utils::{default, Result},
     },
     either::Either,
@@ -13,26 +20,9 @@ use {
         pattern::{parse, parse_until, parse_while},
         Parser as _, Pattern,
     },
-    syn::{
-        parse::{Parse, ParseStream},
-        LitStr,
-    },
+    std::{fmt::Write, mem::take},
+    syn::{Lit, LitStr},
 };
-
-pub fn is_inline_css_attr(element: &str, attr: &str) -> bool {
-    match element {
-        "a" | "abbr" | "article" | "aside" | "audio" | "b" | "blockquote" | "br" | "button"
-        | "canvas" | "caption" | "cite" | "code" | "col" | "colgroup" | "details" | "div"
-        | "dl" | "dt" | "dd" | "em" | "figcaption" | "figure" | "fieldset" | "footer" | "form"
-        | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "header" | "hr" | "i" | "iframe" | "img"
-        | "input" | "label" | "legend" | "li" | "main" | "mark" | "meter" | "nav" | "ol"
-        | "option" | "p" | "pre" | "progress" | "section" | "select" | "small" | "span"
-        | "strong" | "sub" | "summary" | "sup" | "table" | "tbody" | "td" | "textarea"
-        | "tfoot" | "th" | "thead" | "time" | "tr" | "u" | "ul" | "video" => attr == "style",
-
-        _ => false,
-    }
-}
 
 pub struct StyleString {
     span: Span,
@@ -47,11 +37,10 @@ struct Setting {
     value: Location,
 }
 
-impl Parse for StyleString {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let s: LitStr = input.parse()?;
-        let span = s.span();
-        let repr = s.token().to_string();
+impl StyleString {
+    pub fn parse(input: &LitStr) -> syn::Result<Self> {
+        let span = input.span();
+        let repr = input.token().to_string();
 
         let (is_raw, rest) = repr.strip_prefix('r').map_or((false, &*repr), |r| (true, r));
         let n_escapes = rest.bytes().take_while(|&b| b == b'#').count();
@@ -106,6 +95,7 @@ impl Format for StyleString {
             start: LineColumn { line: end.line, column: end.column - self.n_escapes as usize - 1 },
             end,
         };
+
         block.add_delimited_block(
             ctx,
             opening_quote,
@@ -141,4 +131,66 @@ impl Located for StyleString {
     fn end(&self) -> LineColumn {
         self.span.end()
     }
+}
+
+struct CssParser<'config> {
+    config: &'config Config,
+    element_name: String,
+    attr_name: String,
+    error: syn::Result<()>,
+}
+
+impl Visitor for CssParser<'_> {
+    fn visit_base_html_literal_element(
+        &mut self,
+        literal: &mut HtmlLiteralElement<BaseHtmlFlavor>,
+    ) {
+        self.element_name.clear();
+        _ = write!(self.element_name, "{}", literal.name);
+        visitor::visit_base_html_literal_element(self, literal);
+    }
+
+    fn visit_ext_html_literal_element(&mut self, literal: &mut HtmlLiteralElement<ExtHtmlFlavor>) {
+        self.element_name.clear();
+        _ = write!(self.element_name, "{}", literal.name);
+        visitor::visit_ext_html_literal_element(self, literal);
+    }
+
+    fn visit_html_prop(&mut self, prop: &mut HtmlProp) {
+        let (name, eq, style) = match &mut prop.kind {
+            HtmlPropKind::Literal(name, eq, Lit::Str(v)) => {
+                self.attr_name.clear();
+                _ = write!(self.attr_name, "{}", name[0].0);
+                if !self.config.is_inline_css_attr(&self.element_name, &self.attr_name) {
+                    return;
+                }
+
+                let style = match StyleString::parse(v) {
+                    Ok(style) => style,
+                    Err(e) => {
+                        if self.error.is_ok() {
+                            self.error = Err(e);
+                        }
+                        return;
+                    }
+                };
+                (take(name), *eq, style)
+            }
+
+            _ => return,
+        };
+
+        prop.kind = HtmlPropKind::Style(name, eq, style);
+    }
+}
+
+pub fn parse_css(html: &mut Html, config: &Config) -> syn::Result<()> {
+    if !config.yew.format_css {
+        return Ok(());
+    }
+
+    let mut parser =
+        CssParser { config, element_name: String::new(), attr_name: String::new(), error: Ok(()) };
+    parser.visit_html(html);
+    parser.error
 }

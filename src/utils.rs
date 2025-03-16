@@ -168,7 +168,7 @@ impl TokenTreeExt for TokenTree {
 }
 
 /// Overrides `Ident`'s default `Parse` behaviour by accepting Rust keywords
-pub struct AnyIdent(Ident);
+pub struct AnyIdent(pub Ident);
 
 impl Parse for AnyIdent {
     fn parse(input: ParseStream) -> syn::Result<Self> {

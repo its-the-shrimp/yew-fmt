@@ -20,6 +20,7 @@ pub struct YewConfig {
     pub unwrap_literal_prop_values: bool,
     pub use_prop_init_shorthand: bool,
     pub self_close_elements: bool,
+    pub format_css: bool,
     pub html_flavor: HtmlFlavor,
     pub unknown: HashMap<String, IgnoredAny>,
 }
@@ -44,6 +45,7 @@ struct RawConfigYew {
     use_small_heuristics: Option<UseSmallHeuristics>,
     use_prop_init_shorthand: Option<bool>,
     self_close_elements: Option<bool>,
+    format_css: Option<bool>,
     html_flavor: Option<HtmlFlavor>,
     #[serde(flatten)]
     unknown: HashMap<String, IgnoredAny>,
@@ -147,6 +149,7 @@ impl Config {
                 yew.unwrap_literal_prop_values: bool,
                 yew.use_prop_init_shorthand: bool,
                 yew.self_close_elements: bool,
+                yew.format_css: bool,
                 yew.html_flavor: HtmlFlavor
             });
         }
@@ -169,6 +172,8 @@ impl Config {
                     .or(raw.use_field_init_shorthand)
                     .unwrap_or(false),
                 self_close_elements: raw.yew.self_close_elements
+                    .unwrap_or(true),
+                format_css: raw.yew.format_css
                     .unwrap_or(true),
                 html_flavor: raw.yew.html_flavor
                     .unwrap_or(HtmlFlavor::Base),
@@ -256,6 +261,22 @@ impl Config {
 
         for _ in 0..indent {
             out.push(' ');
+        }
+    }
+
+    pub fn is_inline_css_attr(&self, element: &str, attr: &str) -> bool {
+        match element {
+            "a" | "abbr" | "article" | "aside" | "audio" | "b" | "blockquote" | "br" | "button"
+            | "canvas" | "caption" | "cite" | "code" | "col" | "colgroup" | "details" | "div"
+            | "dl" | "dt" | "dd" | "em" | "figcaption" | "figure" | "fieldset" | "footer"
+            | "form" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "header" | "hr" | "i"
+            | "iframe" | "img" | "input" | "label" | "legend" | "li" | "main" | "mark"
+            | "meter" | "nav" | "ol" | "option" | "p" | "pre" | "progress" | "section"
+            | "select" | "small" | "span" | "strong" | "sub" | "summary" | "sup" | "table"
+            | "tbody" | "td" | "textarea" | "tfoot" | "th" | "thead" | "time" | "tr" | "u"
+            | "ul" | "video" => attr == "style",
+
+            _ => false,
         }
     }
 }

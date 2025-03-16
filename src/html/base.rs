@@ -1,23 +1,25 @@
-use crate::{
-    config::UseSmallHeuristics,
-    css::{is_inline_css_attr, StyleString},
-    formatter::{ChainingRule, FmtBlock, FmtCtx, Format, Located, Location, Spacing},
-    html::HtmlFlavorSpec,
-    utils::{default, AnyIdent, OptionExt, Result},
-};
-use anyhow::Context;
-use proc_macro2::{Delimiter, LineColumn, TokenStream, TokenTree};
-use quote::ToTokens;
-use std::iter::from_fn;
-use syn::{
-    braced,
-    buffer::Cursor,
-    parse::{Parse, ParseStream},
-    parse2,
-    punctuated::Punctuated,
-    spanned::Spanned,
-    token::Brace,
-    Block, Expr, Lit, Stmt, Token, Type,
+use {
+    crate::{
+        config::UseSmallHeuristics,
+        css::StyleString,
+        formatter::{ChainingRule, FmtBlock, FmtCtx, Format, Located, Location, Spacing},
+        html::HtmlFlavorSpec,
+        utils::{default, AnyIdent, OptionExt, Result},
+    },
+    anyhow::Context,
+    proc_macro2::{Delimiter, LineColumn, TokenStream, TokenTree},
+    quote::ToTokens,
+    std::iter::from_fn,
+    syn::{
+        braced,
+        buffer::Cursor,
+        parse::{Parse, ParseStream},
+        parse2,
+        punctuated::Punctuated,
+        spanned::Spanned,
+        token::Brace,
+        Block, Expr, Lit, Stmt, Token, Type,
+    },
 };
 
 pub fn parse_children<T: Parse>(input: ParseStream) -> syn::Result<Vec<T>> {
@@ -244,7 +246,7 @@ impl<F: HtmlFlavorSpec> Parse for HtmlFragment<F> {
         let (key, gt_token) = if input.peek(Token![>]) {
             (None, input.parse()?)
         } else {
-            (Some(HtmlProp::parse("", input)?), input.parse()?)
+            (Some(input.parse()?), input.parse()?)
         };
 
         Ok(Self {
@@ -267,7 +269,7 @@ impl<F: HtmlFlavorSpec> Parse for HtmlDynamicElement<F> {
 
         let mut props = vec![];
         while input.cursor().punct().is_none() {
-            props.push(HtmlProp::parse("", input)?)
+            props.push(input.parse()?)
         }
 
         let (children, closing_tag, div_token) = if input.peek(Token![>]) {
@@ -313,11 +315,10 @@ impl<F: HtmlFlavorSpec> Parse for HtmlLiteralElement<F> {
 
         let lt_token = input.parse()?;
         let name = get_name(input)?;
-        let name_str = name.to_string();
 
         let mut props = vec![];
         while input.cursor().punct().is_none() {
-            props.push(HtmlProp::parse(&name_str, input)?)
+            props.push(input.parse()?)
         }
         let prop_base = if input.peek(Token![..]) {
             Some((input.parse()?, parse2(prop_base_collector(input).collect())?).into())
@@ -349,8 +350,8 @@ impl<F: HtmlFlavorSpec> Parse for HtmlLiteralElement<F> {
     }
 }
 
-impl HtmlProp {
-    pub fn parse(element: &str, input: ParseStream) -> syn::Result<Self> {
+impl Parse for HtmlProp {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
         let access_spec = input.parse().ok();
         let kind = if input.peek(Brace) {
             let inner;
@@ -361,8 +362,6 @@ impl HtmlProp {
             let eq_token = input.parse()?;
             if input.peek(Brace) {
                 HtmlPropKind::Block(name, eq_token, input.parse()?)
-            } else if is_inline_css_attr(element, &name.to_token_stream().to_string()) {
-                HtmlPropKind::Style(name, eq_token, input.parse()?)
             } else {
                 HtmlPropKind::Literal(name, eq_token, input.parse()?)
             }

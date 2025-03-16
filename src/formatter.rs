@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::css::parse_css;
 use crate::utils::{default, Result, SliceExt, StrExt};
 use anyhow::{bail, Context};
 use bumpalo::collections::Vec;
@@ -753,7 +754,7 @@ impl<'fmt, 'src: 'fmt> Visit<'_> for FmtCtx<'fmt, 'src> {
                     self.pos_to_byte_offset(html_start)?,
                 );
 
-                let html = match self.config.yew.html_flavor.parse_root(i.tokens.clone()) {
+                let mut html = match self.config.yew.html_flavor.parse_root(i.tokens.clone()) {
                     Ok(html) => html,
                     Err(e) => {
                         let span = e.span();
@@ -766,6 +767,7 @@ impl<'fmt, 'src: 'fmt> Visit<'_> for FmtCtx<'fmt, 'src> {
                         ));
                     }
                 };
+                parse_css(&mut html, self.config)?;
                 html.format(&mut block, self)?;
 
                 self.print_fmt_block(block, html_end)?;

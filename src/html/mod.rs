@@ -1,5 +1,6 @@
 pub mod base;
 pub mod ext;
+pub mod visitor;
 
 use crate::{
     formatter::{FmtBlock, FmtCtx, Format, Located, Spacing},
@@ -24,6 +25,15 @@ pub enum HtmlFlavor {
     Ext,
 }
 
+impl HtmlFlavor {
+    pub fn parse_root(self, input: TokenStream) -> syn::Result<Html> {
+        match self {
+            Self::Base => parse2(input).map(Html::Base),
+            Self::Ext => parse2(input).map(Html::Ext),
+        }
+    }
+}
+
 pub enum Html {
     Base(<BaseHtmlFlavor as HtmlFlavorSpec>::Root),
     Ext(<ExtHtmlFlavor as HtmlFlavorSpec>::Root),
@@ -34,15 +44,6 @@ impl Format for Html {
         match self {
             Html::Base(base) => base.format(block, ctx),
             Html::Ext(ext) => ext.format(block, ctx),
-        }
-    }
-}
-
-impl HtmlFlavor {
-    pub fn parse_root(self, input: TokenStream) -> syn::Result<Html> {
-        match self {
-            Self::Base => parse2(input).map(Html::Base),
-            Self::Ext => parse2(input).map(Html::Ext),
         }
     }
 }
