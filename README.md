@@ -1,7 +1,10 @@
 # yew-fmt
 ## Format HTML-enhanced Rust like normal Rust
-`yew-fmt` is a drop-in replacement for [`rustfmt`](https://github.com/rust-lang/rustfmt), which means that, on top of all of its formatting,
-it applies formatting to the HTML in [`yew::html!`](https://docs.rs/yew/latest/yew/macro.html.html) and [`yew::html_nested!`](https://docs.rs/yew/latest/yew/macro.html_nested.html).
+`yew-fmt` is a drop-in replacement for [`rustfmt`](https://github.com/rust-lang/rustfmt),
+which means that, on top of all of its formatting,
+it applies formatting to the HTML in [`yew::html!`](https://docs.rs/yew/latest/yew/macro.html.html)
+and [`yew::html_nested!`](https://docs.rs/yew/latest/yew/macro.html_nested.html), as well
+as formatting the inline CSS in the HTML elements.
 
 ## Install `yew-fmt`
 Installing it is as easy as
@@ -113,6 +116,20 @@ Make elements self-closed if they have no children.
 #### `true`
 ```html
 <div id="foo" />
+```
+
+### `yew.format_css`
+Format inline CSS in the `style` attribute of base HTML elements. 
+- Default value: `true`
+- Possible values: `true`, `false`
+#### `false`
+```html
+<div style="text-decoration:none;       display: flex" />
+```
+
+#### `true`
+```html
+<div style="text-decoration: none; display: flex" />
 ```
 
 ### `yew.html_flavor`
