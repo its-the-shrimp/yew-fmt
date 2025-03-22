@@ -10,7 +10,8 @@ fn Comp() -> Html {
                 gap: 1.5rem;
                 padding: 0;
                 margin: 0;
-                list-style: none
+                list-style: none;
+                border: 1px solid #ccc
             "
         >
             <strong>{ "Hello, World" }</strong>

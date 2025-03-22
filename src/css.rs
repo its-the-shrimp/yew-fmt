@@ -17,7 +17,7 @@ use {
     proc_macro2::{LineColumn, Span},
     shrimple_parser::{
         any,
-        pattern::{parse, parse_until, parse_while},
+        pattern::{parse, parse_until, parse_while, NotEnclosed},
         Parser as _, Pattern,
     },
     std::{fmt::Write, mem::take},
@@ -65,8 +65,10 @@ impl StyleString {
             .skip(parse_while(whitespace))
             .skip(parse(':').or_reason_if_nonempty("expected `:`"))
             .skip(parse_while(whitespace))
-            .and(parse_until(whitespace.or(';')))
-            .skip(parse_while(whitespace))
+            .and(
+                parse_until(NotEnclosed('"', ';'))
+                    .map_out(|v| whitespace.trailing_matches_counted(v).0),
+            )
             .skip(parse(';').maybe())
             .map_out(|(k, v)| Setting {
                 name: Location::find_saturating(loc, k, rest),
