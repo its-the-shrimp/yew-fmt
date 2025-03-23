@@ -154,6 +154,11 @@ fn max_small_heuristics() {
 }
 
 #[test]
+fn nested_macro() {
+    cmp("tests/samples/nested_macro")
+}
+
+#[test]
 fn no_small_heuristics() {
     cmp("tests/samples/no_small_heuristics")
 }
