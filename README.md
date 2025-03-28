@@ -1,3 +1,5 @@
+If you use it in your work, consider [donating 🥺](https://github.com/sponsors/its-the-shrimp)
+
 # yew-fmt
 ## Format HTML-enhanced Rust like normal Rust
 `yew-fmt` is a drop-in replacement for [`rustfmt`](https://github.com/rust-lang/rustfmt),
