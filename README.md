@@ -29,6 +29,13 @@ with the following command:
 ```console
 export RUSTFMT=yew-fmt
 ```
+If you prefer a project-specific config over an environment variable, you can create 
+a `rust-analyzer.toml` file at the root of your project and include:
+
+```toml
+[rustfmt]
+overrideCommand = ["yew-fmt"]
+```
 
 ## Configure `yew-fmt`
 In the fashion of being a drop-in replacement, it inherits methods of configuration
