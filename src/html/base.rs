@@ -310,11 +310,12 @@ impl<F: HtmlFlavorSpec> Parse for HtmlLiteralElement<F> {
         }
 
         fn get_name(input: ParseStream) -> syn::Result<TokenStream> {
-            if let Ok(ty) = Type::parse(input) {
-                Ok(ty.into_token_stream())
-            } else {
+            // checking that the name starts with `ident-`
+            if input.cursor().ident().and_then(|(_, c)| c.punct()).is_some_and(|(p, _)| p.as_char() == '-') {
                 Punctuated::<AnyIdent, Token![-]>::parse_separated_nonempty(input)
                     .map(ToTokens::into_token_stream)
+            } else {
+                Type::parse(input).map(ToTokens::into_token_stream)
             }
         }
 
