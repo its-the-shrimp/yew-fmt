@@ -255,7 +255,6 @@ impl Format for Html {
                     ctx,
                     Location::zero_width(first.start()),
                     Location::zero_width(last.end()),
-                    false,
                     trees,
                 )?;
                 block.flatten();

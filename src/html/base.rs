@@ -35,7 +35,6 @@ pub fn format_children<'src, F: HtmlFlavorSpec>(
     ctx: &mut FmtCtx<'_, 'src>,
     opening: impl Located,
     closing: impl Located,
-    had_props_block: bool,
     children: &[F::Tree],
 ) -> Result {
     block.add_delimited_block(
@@ -43,7 +42,7 @@ pub fn format_children<'src, F: HtmlFlavorSpec>(
         opening,
         closing,
         F::element_children_spacing(ctx, children),
-        if had_props_block { ChainingRule::End } else { ChainingRule::Off },
+        ChainingRule::Tip,
         |block, ctx| {
             for child in children {
                 child.format(block, ctx)?;
@@ -482,15 +481,7 @@ impl<F: HtmlFlavorSpec> Format for HtmlFragment<F> {
             key.format(block, ctx)?;
         }
 
-        format_children::<F>(
-            block,
-            ctx,
-            self.gt_token,
-            self.closing_lt_token,
-            false,
-            &self.children,
-        )?;
-
+        format_children::<F>(block, ctx, self.gt_token, self.closing_lt_token, &self.children)?;
         block.add_source(ctx, self.div_token)?;
         block.add_source(ctx, self.closing_gt_token)
     }
@@ -515,7 +506,7 @@ impl<F: HtmlFlavorSpec> Format for HtmlDynamicElement<F> {
         })?;
 
         if let Some((gt, closing_lt, closing_at)) = closing_tag {
-            format_children::<F>(block, ctx, gt, closing_lt, true, &self.children)?;
+            format_children::<F>(block, ctx, gt, closing_lt, &self.children)?;
             block.add_source(ctx, self.div_token)?;
             block.add_source(ctx, closing_at)?;
             block.add_source(ctx, self.closing_gt_token)
@@ -553,7 +544,7 @@ impl<F: HtmlFlavorSpec> Format for HtmlLiteralElement<F> {
         )?;
 
         if let Some((gt, closing_lt, closing_name)) = closing_tag {
-            format_children::<F>(block, ctx, gt, closing_lt, true, &self.children)?;
+            format_children::<F>(block, ctx, gt, closing_lt, &self.children)?;
             block.add_source(ctx, self.div_token)?;
             block.add_source_spanned_by_iter(ctx, closing_name.clone())?;
             block.add_source(ctx, self.closing_gt_token)
@@ -656,7 +647,7 @@ impl<F: HtmlFlavorSpec> Format for HtmlIf<F> {
             self.brace.span.open(),
             self.brace.span.close(),
             block_children_spacing(ctx),
-            self.else_branch.choose(ChainingRule::On, ChainingRule::End),
+            self.else_branch.choose(ChainingRule::On, ChainingRule::Last),
             |block, ctx| {
                 for child in &self.then_branch {
                     child.format(block, ctx)?;
@@ -683,7 +674,7 @@ impl<F: HtmlFlavorSpec> Format for HtmlElse<F> {
                     brace.span.open(),
                     brace.span.close(),
                     block_children_spacing(ctx),
-                    ChainingRule::End,
+                    ChainingRule::Last,
                     |block, ctx| {
                         for child in children {
                             child.format(block, ctx)?;

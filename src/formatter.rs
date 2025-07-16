@@ -224,28 +224,38 @@ impl Spacing {
     pub const AROUND: Self = Self { before: true, between: false, after: true };
 }
 
+/// Specifies pertinence of [`FmtBlock`] to a chain & its function in it
+///
 /// Chains are sequences of formatting blocks that are all broken if one of them is broken; in a
 /// sequence of formatting blocks, a chain will have the following shape:
-/// `[..., Off, Full, ..., Full, End, Off, ...]`
-/// where the words are the names of the variants of [`ChainingRule`].
-/// A chain starts from a [`ChainingRule::On`] variant but ends with a [`ChainingRule::End`]; this
-/// is done to make the chains declare their end on their own without having to add an additional
-/// variant to [`FmtToken`], and to also avoid the possibility of 2 unrelated chains getting
-/// misinterpreted as 1.
+/// `[On, On, Last, Off, Off, On, Tip, Off]`
+///
+/// All chains MUST end with [`ChainingRule::Last`] or [`ChainingRule::Tip`]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ChainingRule {
-    /// no chaining
+    /// No chaining
     Off,
-    /// ends a chain (while being inside it itself) and does not break the blocks before it in the
-    /// chain if broken
-    End,
-    /// inside a chain and breaks the blocks before it in the chain if broken
+    /// In a chain
+    ///
+    /// Breaks all the blocks in the chain if broken itself
     On,
+    /// In a chain, the last element of it
+    ///
+    /// Has the same meaning as [`ChainingRule::On`], except that it signals an end of the chain
+    Last,
+    /// Like [`ChainingRule::Last`], but doesn't break prior blocks if broken itself
+    Tip,
 }
 
 impl ChainingRule {
     pub const fn is_on(&self) -> bool {
         matches!(self, Self::On)
+    }
+
+    /// Returns `true` if a block with this chaining rule will force all the prior blocks in a
+    /// chain to break if it itself is broken
+    pub const fn breaks_prior_blocks(&self) -> bool {
+        matches!(self, Self::On | Self::Last)
     }
 }
 
@@ -535,6 +545,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
         let indent = indent + ctx.config.tab_spaces;
         let mut chain_broken = false;
         let mut tokens_iter = self.tokens.iter_with_prev_mut();
+
         while let Some((token, prev_tokens)) = tokens_iter.next() {
             match token {
                 FmtToken::Text(text) => offset = add_last_line_len(offset, text),
@@ -544,7 +555,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
                         block.force_breaking(ctx, indent);
                         chain_broken = block.chaining_rule.is_on()
                     } else if block.determine_breaking(ctx, offset, indent) {
-                        if block.chaining_rule.is_on() {
+                        if block.chaining_rule.breaks_prior_blocks() {
                             for token in prev_tokens.iter_mut().rev() {
                                 let FmtToken::Block(block) = token else { continue };
                                 if !block.chaining_rule.is_on() {
@@ -560,6 +571,7 @@ impl<'fmt, 'src> FmtBlock<'fmt, 'src> {
                     }
                 }
             }
+
             if !chain_broken && indent + offset > ctx.config.yew.html_width {
                 let mut first = true;
                 offset = 0;
